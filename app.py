@@ -1,26 +1,38 @@
 # =============================================================================
-# 1. DEPENDENCY INSTALLATION
-# =============================================================================
-!pip install yfinance pandas numpy requests -q
-
-# =============================================================================
-# 2. ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE NO-JUMP)
+# 1. ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE APP)
 # =============================================================================
 import math
 import time
-import sys
-import io
 import warnings
 from datetime import datetime
 import pandas as pd
 import numpy as np
 import requests
 import yfinance as yf
-from IPython.display import clear_output
+import streamlit as st
 
+# Setup Streamlit Mobile Viewport & Theme
+st.set_page_config(
+    page_title="SMC + COBI Quant Scanner",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Silent unwanted internal logs
 warnings.filterwarnings("ignore")
 import logging
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+# Mobile-Optimized CSS to prevent page jump and handle layout
+st.markdown("""
+<style>
+    .block-container { padding-top: 1rem; padding-bottom: 1rem; padding-left: 0.5rem; padding-right: 0.5rem; }
+    .metric-card { background-color: rgba(128, 128, 128, 0.1); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
+    div[data-testid="stDataFrame"] { width: 100%; font-size: 11.5px !important; }
+    table { font-size: 11.5px !important; }
+</style>
+""", unsafe_allow_html=True)
 
 # Configuration Parameters
 PRICE_MIN = 300.0
@@ -66,10 +78,8 @@ def create_robust_nse_session():
         "Referer": "https://www.nseindia.com",
         "Connection": "keep-alive"
     })
-    try:
-        session.get("https://www.nseindia.com", timeout=3)
-    except Exception:
-        pass
+    try: session.get("https://www.nseindia.com", timeout=3)
+    except: pass
     return session
 
 # =============================================================================
@@ -94,17 +104,14 @@ def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
             asks = [(clean_num(a.get("price")), clean_num(a.get("quantity"))) for a in raw_asks if clean_num(a.get("quantity")) > 0][:5]
 
             if len(bids) > 0 and len(asks) > 0 and (buy_q > 0 or sell_q > 0):
-                # 1. OBIR Calculation
                 obir = (buy_q - sell_q) / (buy_q + sell_q) if (buy_q + sell_q) > 0 else 0.0
 
-                # 2. WOB Calculation
                 depth_len = min(len(bids), len(asks))
                 depth_weights = 1.0 / np.arange(1, depth_len + 1)
                 w_bid_sum = np.sum([b[1] for b in bids[:depth_len]] * depth_weights)
                 w_ask_sum = np.sum([a[1] for a in asks[:depth_len]] * depth_weights)
                 wob = (w_bid_sum - w_ask_sum) / (w_bid_sum + w_ask_sum) if (w_bid_sum + w_ask_sum) > 0 else 0.0
 
-                # 3. MPDR Calculation
                 p_bid1, q_bid1 = bids[0][0], bids[0][1]
                 p_ask1, q_ask1 = asks[0][0], asks[0][1]
                 spread = max(p_ask1 - p_bid1, 0.05)
@@ -112,16 +119,14 @@ def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
                 p_micro = (p_bid1 * q_ask1 + p_ask1 * q_bid1) / (q_bid1 + q_ask1) if (q_bid1 + q_ask1) > 0 else p_mid
                 mpdr = max(min((p_micro - p_mid) / (spread / 2.0), 1.0), -1.0)
 
-                # 4. Composite COBI Index
                 cobi_score = (0.30 * obir) + (0.40 * wob) + (0.30 * mpdr)
                 bs_ratio = round(buy_q / (sell_q if sell_q > 0 else 1), 2)
                 imbalance = int(buy_q - sell_q)
 
                 return bs_ratio, imbalance, cobi_score, True
-    except Exception:
+    except:
         pass
 
-    # Mathematical synthetic proxy during off-market
     synth_cobi = max(min(p_change / 3.0, 1.0), -1.0)
     bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
     imbalance = int(today_vol * (p_change / 100))
@@ -147,14 +152,12 @@ def evaluate_pine_indicator(df_tf):
     atr, rsi, ema13 = df['ATR14'].values, df['RSI14'].values, df['EMA13'].values
     ema_up, ema_dn = df['EMA13_Up'].values, df['EMA13_Dn'].values
 
-    # 1. State Machine Engine (Section 6)
     p_smc, fvgMinAtr, stateLife = 5, 0.1, 30
     bullState, bullBars = 0, 0
     bearState, bearBars = 0, 0
     trendSMC = 0
     lastHigh, lastLow, prevHigh_smc, prevLow_smc = np.nan, np.nan, np.nan, np.nan
 
-    # 2. Demand & Supply Matrix Configuration (Section 9)
     p_mat = 2
     mergeThresh = 0.3
     maxTests = 4
@@ -199,7 +202,6 @@ def evaluate_pine_indicator(df_tf):
         if bearState >= 2 and bearFVG: bearState, bearBars = 4, 0
         if bearBars > stateLife: bearState = 0
 
-        # State Confirmation Trigger
         if (bullState == 4 or (closes[i] > ema13[i] and ema_up[i])) and rsi[i] > 50:
             trendSMC = 1
         elif (bearState == 4 or (closes[i] < ema13[i] and ema_dn[i])) and rsi[i] < 50:
@@ -208,26 +210,24 @@ def evaluate_pine_indicator(df_tf):
         if trendSMC == 1 and (closes[i] < ema13[i] and rsi[i] < 45): trendSMC = 0
         if trendSMC == -1 and (closes[i] > ema13[i] and rsi[i] > 55): trendSMC = 0
 
-        # Box Detection Engine
         if i >= 2 * p_mat:
             pm = i - p_mat
             is_pm_hi = all(highs[pm] > highs[pm-k] for k in range(1, p_mat + 1)) and all(highs[pm] > highs[pm+k] for k in range(1, p_mat + 1)):
-                if is_pm_hi:
-                    topLvl = highs[pm]
-                    botLvl = max(opens[pm], closes[pm])
-                    isDup = any(b['active'] and abs(b['top'] - topLvl) < (atr[i] * mergeThresh) for b in s_Boxes)
-                    if not isDup:
-                        s_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
+            if is_pm_hi:
+                topLvl = highs[pm]
+                botLvl = max(opens[pm], closes[pm])
+                isDup = any(b['active'] and abs(b['top'] - topLvl) < (atr[i] * mergeThresh) for b in s_Boxes)
+                if not isDup:
+                    s_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
 
             is_pm_lo = all(lows[pm] < lows[pm-k] for k in range(1, p_mat + 1)) and all(lows[pm] < lows[pm+k] for k in range(1, p_mat + 1)):
-                if is_pm_lo:
-                    topLvl = min(opens[pm], closes[pm])
-                    botLvl = lows[pm]
-                    isDup = any(b['active'] and abs(b['bot'] - botLvl) < (atr[i] * mergeThresh) for b in d_Boxes)
-                    if not isDup:
-                        d_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
+            if is_pm_lo:
+                topLvl = min(opens[pm], closes[pm])
+                botLvl = lows[pm]
+                isDup = any(b['active'] and abs(b['bot'] - botLvl) < (atr[i] * mergeThresh) for b in d_Boxes)
+                if not isDup:
+                    d_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
 
-        # Mitigation & Zone Break Engine
         for b in s_Boxes:
             if b['active']:
                 if highs[i] > b['bot'] and (i > 0 and highs[i-1] <= b['bot']):
@@ -261,153 +261,135 @@ def evaluate_pine_indicator(df_tf):
 
     return ema_color, box_status, is_bullish_entry, is_bearish_entry
 
-# Helper for Safe MultiIndex Data Extraction
-def extract_df(data_dict, ticker):
+# =============================================================================
+# DATA FETCHING & ANALYSIS WORKER
+# =============================================================================
+def fetch_scan_results():
+    session = create_robust_nse_session()
+    yf_symbols = [f"{s}.NS" for s in WATCHLIST]
+
     try:
-        if isinstance(data_dict.columns, pd.MultiIndex):
-            if ticker in data_dict.columns.levels[0]:
-                return data_dict[ticker].dropna()
-        else:
-            return data_dict.dropna()
-    except Exception:
-        pass
-    return pd.DataFrame()
+        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", progress=False, timeout=8)
+        data_3m = yf.download(yf_symbols, period="5d", interval="2m", group_by="ticker", progress=False, timeout=8)
+        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", progress=False, timeout=8)
+    except:
+        return [], []
+
+    full_rows = []
+    filtered_rows = []
+
+    for sym in WATCHLIST:
+        t_str = f"{sym}.NS"
+        try:
+            df_d = data_daily[t_str].dropna() if (isinstance(data_daily.columns, pd.MultiIndex) and t_str in data_daily.columns.levels[0]) else data_daily.dropna()
+            df_3 = data_3m[t_str].dropna() if (isinstance(data_3m.columns, pd.MultiIndex) and t_str in data_3m.columns.levels[0]) else data_3m.dropna()
+            df_5 = data_5m[t_str].dropna() if (isinstance(data_5m.columns, pd.MultiIndex) and t_str in data_5m.columns.levels[0]) else data_5m.dropna()
+
+            if len(df_d) < 2 or len(df_5) < 30: continue
+
+            ltp = float(df_5.iloc[-1]["Close"])
+            if not (PRICE_MIN <= ltp <= PRICE_MAX): continue
+
+            prev_close = float(df_d.iloc[-2]["Close"])
+            p_change = ((ltp - prev_close) / prev_close) * 100
+
+            today_vol = float(df_d.iloc[-1]["Volume"])
+            avg_vol_1w = df_d["Volume"].iloc[:-1].mean() if len(df_d) > 1 else today_vol
+            vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0
+
+            high, low, close = float(df_d.iloc[-1]["High"]), float(df_d.iloc[-1]["Low"]), float(df_d.iloc[-1]["Close"])
+            approx_vwap = (high + low + close) / 3
+            vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
+            vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
+
+            bs_ratio, imbalance, cobi_val, has_depth = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
+
+            ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 30 else df_5)
+            ema5_col, box5_t, is_bull_5m, is_bear_5m = evaluate_pine_indicator(df_5)
+
+            tr = pd.concat([df_d["High"] - df_d["Low"], (df_d["High"] - df_d["Close"].shift(1)).abs(), (df_d["Low"] - df_d["Close"].shift(1)).abs()], axis=1).max(axis=1)
+            spread = float(tr.iloc[-5:].mean()) * 1.2 if len(tr) >= 5 else 5.0
+
+            if (is_bull_3m or is_bull_5m) and cobi_val >= 0.35 and vwap_status == "ABOVE (+)":
+                action = "🚀 INSTITUTIONAL PRO BUY"
+            elif (is_bear_3m or is_bear_5m) and cobi_val <= -0.35 and vwap_status == "BELOW (-)":
+                action = "🔻 INSTITUTIONAL PRO SELL"
+            elif is_bull_3m and is_bull_5m:
+                action = "🟢 SMC PRO BUY (3m+5m)"
+            elif is_bull_3m or is_bull_5m:
+                action = "🟢 SMC PRO BUY"
+            elif is_bear_3m and is_bear_5m:
+                action = "🔴 SMC PRO SELL (3m+5m)"
+            elif is_bear_3m or is_bear_5m:
+                action = "🔴 SMC PRO SELL"
+            elif cobi_val >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
+                action = "🟢 STRONG BUY"
+            elif cobi_val <= -0.40 and p_change < -0.5 and vol_chg_pct > 10:
+                action = "🔴 STRONG SELL"
+            elif cobi_val > 0.25 and vwap_status == "ABOVE (+)":
+                action = "🟢 ACCUMULATION"
+            elif cobi_val < -0.25 and vwap_status == "BELOW (-)":
+                action = "🔴 DISTRIBUTION"
+            else:
+                action = "🟡 SIDEWAYS"
+
+            row_data = {
+                "Symbol": sym,
+                "Price": round(ltp, 2),
+                "Chg%": f"{p_change:+.2f}%",
+                "Vol%": f"{vol_chg_pct:+.2f}%",
+                "EMA(3m)": ema3_col,
+                "Box(3m)": box3_t,
+                "EMA(5m)": ema5_col,
+                "Box(5m)": box5_t,
+                "B/S": bs_ratio,
+                "Imbalance": imbalance,
+                "COBI": round(cobi_val, 2),
+                "VWAP": vwap_status,
+                "Spread": round(spread, 2),
+                "Action": action
+            }
+
+            if any(k in action for k in ["INSTITUTIONAL", "SMC PRO", "STRONG"]):
+                filtered_rows.append(row_data)
+            else:
+                full_rows.append(row_data)
+
+        except:
+            continue
+
+    return filtered_rows, full_rows
 
 # =============================================================================
-# LIVE MONITORING SCANNER LOOP (FLICKER-FREE MOBILE ENGINE)
+# STREAMLIT UI WITH SCROLL-FREE AUTO REFRESH
 # =============================================================================
-session = create_robust_nse_session()
-yf_symbols = [f"{s}.NS" for s in WATCHLIST]
-cycle = 1
+st.title("⚡ SMC (3m/5m) + COBI Confluence Scanner")
 
-while True:
-    try:
-        # Download market data cleanly
-        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", progress=False, timeout=10)
-        data_3m = yf.download(yf_symbols, period="5d", interval="2m", group_by="ticker", progress=False, timeout=10)
-        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", progress=False, timeout=10)
+# Top Metrics Row
+col1, col2 = st.columns([1, 1])
+with col1:
+    st.metric("Status", "Active [Rs 300 - 600]")
+with col2:
+    st.metric("Last Update", datetime.now().strftime("%H:%M:%S"))
 
-        full_cards = []
-        filtered_cards = []
+# Persistent Render Slot (Stops screen jumping)
+main_slot = st.empty()
 
-        for sym in WATCHLIST:
-            t_str = f"{sym}.NS"
-            try:
-                df_d = extract_df(data_daily, t_str)
-                df_3 = extract_df(data_3m, t_str)
-                df_5 = extract_df(data_5m, t_str)
+filtered_data, full_data = fetch_scan_results()
 
-                if len(df_d) < 2 or len(df_5) < 30: 
-                    continue
+with main_slot.container():
+    st.subheader("🎯 High Conviction Trades (Institutional / SMC Pro / Strong)")
+    if filtered_data:
+        st.dataframe(pd.DataFrame(filtered_data), use_container_width=True, hide_index=True)
+    else:
+        st.info("⚡ No High-Conviction setups currently triggered in Rs 300-600 range.")
 
-                ltp = float(df_5.iloc[-1]["Close"])
-                if not (PRICE_MIN <= ltp <= PRICE_MAX): 
-                    continue
+    st.subheader("📊 Other Watchlist Stocks (No Duplication)")
+    if full_data:
+        st.dataframe(pd.DataFrame(full_data), use_container_width=True, hide_index=True)
+    else:
+        st.warning("Fetching market data or no stocks currently in range...")
 
-                prev_close = float(df_d.iloc[-2]["Close"])
-                p_change = ((ltp - prev_close) / prev_close) * 100
-
-                today_vol = float(df_d.iloc[-1]["Volume"])
-                avg_vol_1w = df_d["Volume"].iloc[:-1].mean() if len(df_d) > 1 else today_vol
-                vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0.0
-
-                high, low, close = float(df_d.iloc[-1]["High"]), float(df_d.iloc[-1]["Low"]), float(df_d.iloc[-1]["Close"])
-                approx_vwap = (high + low + close) / 3.0
-                vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
-                vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
-
-                # Level-2 COBI Calculation
-                bs_ratio, imbalance, cobi_val, has_depth = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
-                imb_vs_avg_vol_pct = ((imbalance / avg_vol_1w) * 100) if avg_vol_1w > 0 else 0.0
-
-                # Strict Pine Execution
-                ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 30 else df_5)
-                ema5_col, box5_t, is_bull_5m, is_bear_5m = evaluate_pine_indicator(df_5)
-
-                tr = pd.concat([df_d["High"] - df_d["Low"], (df_d["High"] - df_d["Close"].shift(1)).abs(), (df_d["Low"] - df_d["Close"].shift(1)).abs()], axis=1).max(axis=1)
-                spread = float(tr.iloc[-5:].mean()) * 1.2 if len(tr) >= 5 else 5.0
-
-                # Confluence Decision Matrix
-                if (is_bull_3m or is_bull_5m) and cobi_val >= 0.35 and vwap_status == "ABOVE (+)":
-                    action = "🚀 INSTITUTIONAL PRO BUY"
-                elif (is_bear_3m or is_bear_5m) and cobi_val <= -0.35 and vwap_status == "BELOW (-)":
-                    action = "🔻 INSTITUTIONAL PRO SELL"
-                elif is_bull_3m and is_bull_5m:
-                    action = "🟢 SMC PRO BUY (3m+5m)"
-                elif is_bull_3m or is_bull_5m:
-                    action = "🟢 SMC PRO BUY"
-                elif is_bear_3m and is_bear_5m:
-                    action = "🔴 SMC PRO SELL (3m+5m)"
-                elif is_bear_3m or is_bear_5m:
-                    action = "🔴 SMC PRO SELL"
-                elif cobi_val >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
-                    action = "🟢 STRONG BUY"
-                elif cobi_val <= -0.40 and p_change < -0.5 and vol_chg_pct > 10:
-                    action = "🔴 STRONG SELL"
-                elif cobi_val > 0.25 and vwap_status == "ABOVE (+)":
-                    action = "🟢 ACCUMULATION"
-                elif cobi_val < -0.25 and vwap_status == "BELOW (-)":
-                    action = "🔴 DISTRIBUTION"
-                else:
-                    action = "🟡 SIDEWAYS"
-
-                # Mobile Responsive Card Layout (Under 40 chars width)
-                card = (
-                    f"┌── {sym} ─────────────\n"
-                    f"│ ₹{ltp:.2f} ({p_change:+.2f}%) | Vol:{vol_chg_pct:+.1f}%\n"
-                    f"│ 3m:{ema3_col.split()[0]} {box3_t:<6} | 5m:{ema5_col.split()[0]} {box5_t:<6}\n"
-                    f"│ COBI:{cobi_val:+.2f} | B/S:{bs_ratio:.2f} | {vwap_status}\n"
-                    f"└► {action}"
-                )
-
-                full_cards.append(card)
-                if any(k in action for k in ["INSTITUTIONAL", "SMC PRO", "STRONG"]):
-                    filtered_cards.append(card)
-
-            except Exception:
-                continue
-
-        # Atomic Stream Construction (Eliminates screen scrolling & blinking)
-        buf = io.StringIO()
-        div = "=" * 36
-        cur_time = datetime.now().strftime('%H:%M:%S')
-
-        buf.write(f"{div}\n")
-        buf.write(f"📊 SMC+COBI QUANT SCANNER\n")
-        buf.write(f"🕒 {cur_time} | Cycle: #{cycle} | [₹300-600]\n")
-        buf.write(f"{div}\n\n")
-
-        buf.write(f"🎯 HIGH CONVICTION SETUPS ({len(filtered_cards)})\n")
-        buf.write(f"{'-' * 36}\n")
-        if filtered_cards:
-            for c in filtered_cards:
-                buf.write(c + "\n\n")
-        else:
-            buf.write("⚡ No High-Conviction setups active.\n\n")
-
-        buf.write(f"📋 ALL MONITORED STOCKS ({len(full_cards)})\n")
-        buf.write(f"{'-' * 36}\n")
-        if full_cards:
-            for c in full_cards:
-                buf.write(c + "\n\n")
-        else:
-            buf.write("No stocks matching ₹300-600 criteria.\n\n")
-        buf.write(f"{div}\n")
-
-        rendered_output = buf.getvalue()
-        buf.close()
-
-        # Non-jumping instant refresh
-        clear_output(wait=True)
-        sys.stdout.write(rendered_output)
-        sys.stdout.flush()
-
-        cycle += 1
-        time.sleep(15)
-
-    except KeyboardInterrupt:
-        print("\nScanner stopped by user.")
-        break
-    except Exception:
-        time.sleep(5)
-        continue
+# Background sleep & auto-refresh
+time.sleep(12)
+st.rerun()
