@@ -4,7 +4,7 @@
 !pip install yfinance pandas numpy requests -q
 
 # =============================================================================
-# 2. ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE/SMOOTH UI)
+# 2. ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE NO-JUMP)
 # =============================================================================
 import math
 import time
@@ -16,7 +16,7 @@ import pandas as pd
 import numpy as np
 import requests
 import yfinance as yf
-from IPython.display import display, HTML
+from IPython.display import clear_output
 
 warnings.filterwarnings("ignore")
 import logging
@@ -66,8 +66,10 @@ def create_robust_nse_session():
         "Referer": "https://www.nseindia.com",
         "Connection": "keep-alive"
     })
-    try: session.get("https://www.nseindia.com", timeout=3)
-    except: pass
+    try:
+        session.get("https://www.nseindia.com", timeout=3)
+    except Exception:
+        pass
     return session
 
 # =============================================================================
@@ -116,7 +118,7 @@ def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
                 imbalance = int(buy_q - sell_q)
 
                 return bs_ratio, imbalance, cobi_score, True
-    except:
+    except Exception:
         pass
 
     # Mathematical synthetic proxy during off-market
@@ -259,46 +261,58 @@ def evaluate_pine_indicator(df_tf):
 
     return ema_color, box_status, is_bullish_entry, is_bearish_entry
 
+# Helper for Safe MultiIndex Data Extraction
+def extract_df(data_dict, ticker):
+    try:
+        if isinstance(data_dict.columns, pd.MultiIndex):
+            if ticker in data_dict.columns.levels[0]:
+                return data_dict[ticker].dropna()
+        else:
+            return data_dict.dropna()
+    except Exception:
+        pass
+    return pd.DataFrame()
+
 # =============================================================================
-# LIVE MONITORING SCANNER LOOP (SMOOTH NON-JUMPING MOBILE UI)
+# LIVE MONITORING SCANNER LOOP (FLICKER-FREE MOBILE ENGINE)
 # =============================================================================
 session = create_robust_nse_session()
 yf_symbols = [f"{s}.NS" for s in WATCHLIST]
 cycle = 1
 
-# Setup a static display handle to prevent screen jumping/flickering
-display_handle = display(HTML("<div style='color:#bbb;font-family:sans-serif;'>Initializing Mobile SMC Scanner Engine...</div>"), display_id=True)
-
 while True:
     try:
-        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", progress=False, timeout=8)
-        data_3m = yf.download(yf_symbols, period="5d", interval="2m", group_by="ticker", progress=False, timeout=8)
-        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", progress=False, timeout=8)
+        # Download market data cleanly
+        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", progress=False, timeout=10)
+        data_3m = yf.download(yf_symbols, period="5d", interval="2m", group_by="ticker", progress=False, timeout=10)
+        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", progress=False, timeout=10)
 
-        cards_all = []
-        cards_conviction = []
+        full_cards = []
+        filtered_cards = []
 
         for sym in WATCHLIST:
             t_str = f"{sym}.NS"
             try:
-                df_d = data_daily[t_str].dropna() if (isinstance(data_daily.columns, pd.MultiIndex) and t_str in data_daily.columns.levels[0]) else data_daily.dropna()
-                df_3 = data_3m[t_str].dropna() if (isinstance(data_3m.columns, pd.MultiIndex) and t_str in data_3m.columns.levels[0]) else data_3m.dropna()
-                df_5 = data_5m[t_str].dropna() if (isinstance(data_5m.columns, pd.MultiIndex) and t_str in data_5m.columns.levels[0]) else data_5m.dropna()
+                df_d = extract_df(data_daily, t_str)
+                df_3 = extract_df(data_3m, t_str)
+                df_5 = extract_df(data_5m, t_str)
 
-                if len(df_d) < 2 or len(df_5) < 30: continue
+                if len(df_d) < 2 or len(df_5) < 30: 
+                    continue
 
                 ltp = float(df_5.iloc[-1]["Close"])
-                if not (PRICE_MIN <= ltp <= PRICE_MAX): continue
+                if not (PRICE_MIN <= ltp <= PRICE_MAX): 
+                    continue
 
                 prev_close = float(df_d.iloc[-2]["Close"])
                 p_change = ((ltp - prev_close) / prev_close) * 100
 
                 today_vol = float(df_d.iloc[-1]["Volume"])
                 avg_vol_1w = df_d["Volume"].iloc[:-1].mean() if len(df_d) > 1 else today_vol
-                vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0
+                vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0.0
 
                 high, low, close = float(df_d.iloc[-1]["High"]), float(df_d.iloc[-1]["Low"]), float(df_d.iloc[-1]["Close"])
-                approx_vwap = (high + low + close) / 3
+                approx_vwap = (high + low + close) / 3.0
                 vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
                 vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
 
@@ -337,66 +351,56 @@ while True:
                 else:
                     action = "🟡 SIDEWAYS"
 
-                # Mobile Responsive Card Block Template
-                card_html = f"""
-                <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px 12px; margin-bottom:8px; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; color:#c9d1d9;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #21262d; padding-bottom:6px; margin-bottom:6px;">
-                        <span style="font-size:16px; font-weight:700; color:#58a6ff;">{sym}</span>
-                        <span style="font-size:15px; font-weight:700; color:#f0f6fc;">₹{ltp:.2f} 
-                            <span style="font-size:12px; color:{'#3fb950' if p_change >= 0 else '#f85149'};">({p_change:+.2f}%)</span>
-                        </span>
-                    </div>
-                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:4px; font-size:12px;">
-                        <div><b>3m SMC:</b> {ema3_col.replace('🟢 ', '').replace('🔴 ', '').replace('🟡 ', '')} | {box3_t}</div>
-                        <div><b>5m SMC:</b> {ema5_col.replace('🟢 ', '').replace('🔴 ', '').replace('🟡 ', '')} | {box5_t}</div>
-                        <div><b>COBI / B-S:</b> <span style="color:{'#3fb950' if cobi_val > 0 else '#f85149'};">{cobi_val:+.2f}</span> | {bs_ratio}x</div>
-                        <div><b>VWAP:</b> {vwap_status}</div>
-                        <div><b>Vol Chg:</b> {vol_chg_pct:+.1f}%</div>
-                        <div><b>Spread / Imb:</b> {spread:.1f} | {imbalance}</div>
-                    </div>
-                    <div style="margin-top:7px; padding:5px 8px; border-radius:4px; background:#0d1117; font-size:12px; font-weight:600; text-align:center; color:#f0f6fc; border: 1px solid #30363d;">
-                        {action}
-                    </div>
-                </div>
-                """
+                # Mobile Responsive Card Layout (Under 40 chars width)
+                card = (
+                    f"┌── {sym} ─────────────\n"
+                    f"│ ₹{ltp:.2f} ({p_change:+.2f}%) | Vol:{vol_chg_pct:+.1f}%\n"
+                    f"│ 3m:{ema3_col.split()[0]} {box3_t:<6} | 5m:{ema5_col.split()[0]} {box5_t:<6}\n"
+                    f"│ COBI:{cobi_val:+.2f} | B/S:{bs_ratio:.2f} | {vwap_status}\n"
+                    f"└► {action}"
+                )
 
-                cards_all.append(card_html)
+                full_cards.append(card)
                 if any(k in action for k in ["INSTITUTIONAL", "SMC PRO", "STRONG"]):
-                    cards_conviction.append(card_html)
+                    filtered_cards.append(card)
 
-            except:
+            except Exception:
                 continue
 
-        # Render Content Assembly
+        # Atomic Stream Construction (Eliminates screen scrolling & blinking)
+        buf = io.StringIO()
+        div = "=" * 36
         cur_time = datetime.now().strftime('%H:%M:%S')
-        conviction_body = "".join(cards_conviction) if cards_conviction else "<div style='color:#8b949e; font-size:13px; padding:10px; text-align:center;'>⚡ No High-Conviction setups triggered right now.</div>"
-        all_body = "".join(cards_all) if cards_all else "<div style='color:#8b949e; font-size:13px; padding:10px; text-align:center;'>No active stocks matching criteria.</div>"
 
-        full_html = f"""
-        <div style="max-width:480px; margin:auto; background:#0d1117; padding:12px; border-radius:12px; border:1px solid #30363d;">
-            <div style="background:#1f242c; padding:10px; border-radius:8px; margin-bottom:12px; border-left:4px solid #58a6ff;">
-                <div style="font-size:14px; font-weight:700; color:#f0f6fc;">📊 SMC + COBI MOBILE QUANT</div>
-                <div style="font-size:11px; color:#8b949e; margin-top:2px;">Range: ₹300-600 | 🕒 {cur_time} | Cycle: #{cycle}</div>
-            </div>
+        buf.write(f"{div}\n")
+        buf.write(f"📊 SMC+COBI QUANT SCANNER\n")
+        buf.write(f"🕒 {cur_time} | Cycle: #{cycle} | [₹300-600]\n")
+        buf.write(f"{div}\n\n")
 
-            <div style="font-size:13px; font-weight:700; color:#e3b341; margin-bottom:8px; display:flex; align-items:center; gap:5px;">
-                🎯 HIGH CONVICTION SETUPS ({len(cards_conviction)})
-            </div>
-            {conviction_body}
+        buf.write(f"🎯 HIGH CONVICTION SETUPS ({len(filtered_cards)})\n")
+        buf.write(f"{'-' * 36}\n")
+        if filtered_cards:
+            for c in filtered_cards:
+                buf.write(c + "\n\n")
+        else:
+            buf.write("⚡ No High-Conviction setups active.\n\n")
 
-            <details style="margin-top:12px; background:#161b22; border-radius:8px; padding:8px; border:1px solid #30363d;">
-                <summary style="cursor:pointer; font-size:13px; font-weight:600; color:#58a6ff; outline:none;">
-                    📋 All Watchlist Stocks ({len(cards_all)})
-                </summary>
-                <div style="margin-top:10px;">
-                    {all_body}
-                </div>
-            </details>
-        </div>
-        """
+        buf.write(f"📋 ALL MONITORED STOCKS ({len(full_cards)})\n")
+        buf.write(f"{'-' * 36}\n")
+        if full_cards:
+            for c in full_cards:
+                buf.write(c + "\n\n")
+        else:
+            buf.write("No stocks matching ₹300-600 criteria.\n\n")
+        buf.write(f"{div}\n")
 
-        # In-place UI update (stops layout hopping/jumping completely)
-        display_handle.update(HTML(full_html))
+        rendered_output = buf.getvalue()
+        buf.close()
+
+        # Non-jumping instant refresh
+        clear_output(wait=True)
+        sys.stdout.write(rendered_output)
+        sys.stdout.flush()
 
         cycle += 1
         time.sleep(15)
@@ -404,6 +408,6 @@ while True:
     except KeyboardInterrupt:
         print("\nScanner stopped by user.")
         break
-    except:
+    except Exception:
         time.sleep(5)
         continue
