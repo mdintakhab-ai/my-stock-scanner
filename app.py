@@ -1,5 +1,5 @@
 # =============================================================================
-# MOBILE STREAMLIT ENGINE (3M & 5M CONFLUENCE / DEDUPLICATED LISTS / PWA-READY)
+# MOBILE STREAMLIT ENGINE (PWA-READY / AUTO-REFRESH / ENHANCED IMBALANCE)
 # =============================================================================
 import math
 import time
@@ -13,7 +13,7 @@ import streamlit as st
 
 # Setup Streamlit Mobile Viewport & Theme
 st.set_page_config(
-    page_title="Quant 3M & 5M Scanner",
+    page_title="Quant 5M Scanner",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -173,21 +173,21 @@ def calculate_target_spread(pd_high, pd_low, pd_close, pd_close20, d_atr, d_ema2
     s2_val = pd_close - range_macro + (rs_shift_macro if rs_shift_macro < 0 else 0.0)
     return (r2_val - s2_val) / 2.0
 
-# ==================== TIMEFRAME SMC & BOX ENGINE ====================
-def compute_smc_matrix_tf(df_tf):
-    if len(df_tf) < 25:
+# ==================== 5-MIN SMC & BOX ENGINE ====================
+def compute_smc_matrix_5m(df_5m):
+    if len(df_5m) < 35:
         return "NEUTRAL", "NONE", False, False
 
-    df = df_tf.copy()
+    df = df_5m.copy()
     df['EMA13'] = df['Close'].ewm(span=13, adjust=False).mean()
     df['EMA13_Up'] = df['EMA13'] > df['EMA13'].shift(1)
     df['EMA13_Dn'] = df['EMA13'] < df['EMA13'].shift(1)
     df['RSI14'] = calculate_rsi(df['Close'], 14)
     df['ATR14'] = calculate_atr(df, 14)
     df['Vol_SMA14'] = df['Volume'].rolling(14).mean()
-    df['Vol_Breakout'] = (df['Volume'] > (df['Vol_SMA14'] * 1.25)) & (df['Volume'] > df['Volume'].shift(1).rolling(3).max())
+    df['Vol_Breakout'] = (df['Volume'] > (df['Vol_SMA14'] * 1.3)) & (df['Volume'] > df['Volume'].shift(1).rolling(3).max())
 
-    pivotLen_smc, fvgMinAtr, stateLife = 4, 0.1, 25
+    pivotLen_smc, fvgMinAtr, stateLife = 5, 0.1, 30
     n = len(df)
     highs, lows, closes, opens = df['High'].values, df['Low'].values, df['Close'].values, df['Open'].values
     atr, rsi, ema13 = df['ATR14'].values, df['RSI14'].values, df['EMA13'].values
@@ -211,6 +211,7 @@ def compute_smc_matrix_tf(df_tf):
 
         close_prev = closes[i-1] if i > 0 else closes[i]
 
+        # Bull State Path
         bull_sweep = not np.isnan(last_low) and lows[i] < last_low and closes[i] > last_low
         bull_mss = not np.isnan(last_high) and closes[i] > last_high and close_prev <= last_high
         bull_bos = not np.isnan(prev_high) and not np.isnan(last_high) and last_high > prev_high and closes[i] > last_high and close_prev <= last_high
@@ -222,6 +223,7 @@ def compute_smc_matrix_tf(df_tf):
         if b_state >= 2 and bull_fvg: b_state, b_bars = 4, 0
         if b_bars > stateLife: b_state = 0
 
+        # Bear State Path
         bear_sweep = not np.isnan(last_high) and highs[i] > last_high and closes[i] < last_high
         bear_mss = not np.isnan(last_low) and closes[i] < last_low and close_prev >= last_low
         bear_bos = not np.isnan(prev_low) and not np.isnan(last_low) and last_low < prev_low and closes[i] < last_low and close_prev >= last_low
@@ -242,6 +244,7 @@ def compute_smc_matrix_tf(df_tf):
         if current_trend == 1 and (closes[i] < ema13[i] and rsi[i] < 45): current_trend = 0
         if current_trend == -1 and (closes[i] > ema13[i] and rsi[i] > 55): current_trend = 0
 
+    # Demand & Supply Box Logic
     pivotLen_matrix, mergeThresh = 2, 0.3
     demand_boxes, supply_boxes = [], []
     supply_created_recent = False
@@ -288,13 +291,11 @@ def run_scan():
     try:
         data_daily = yf.download(yf_symbols, period="250d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
         data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
-        data_2m = yf.download(yf_symbols, period="3d", interval="2m", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
     except Exception:
         return [], [], nifty_trend
 
     full_out = []
     filtered_signals = []
-    high_conviction_symbols = set()
 
     for sym in WATCHLIST:
         t_str = f"{sym}.NS"
@@ -315,28 +316,7 @@ def run_scan():
                 if t_str not in data_5m: continue
                 df_5 = data_5m.dropna()
 
-            if len(df_5) < 30: continue
-
-            if isinstance(data_2m.columns, pd.MultiIndex):
-                if t_str not in data_2m.columns.levels[0]: continue
-                df_raw = data_2m[t_str].dropna()
-            else:
-                if t_str not in data_2m: continue
-                df_raw = data_2m.dropna()
-
-            if len(df_raw) >= 30:
-                df_3 = df_raw.resample('3min').agg({
-                    'Open': 'first',
-                    'High': 'max',
-                    'Low': 'min',
-                    'Close': 'last',
-                    'Volume': 'sum'
-                }).dropna()
-            else:
-                df_3 = df_5.copy()
-
-            if len(df_3) < 20:
-                df_3 = df_5.copy()
+            if len(df_5) < 35: continue
 
             ltp = float(df_5.iloc[-1]["Close"])
             open_p = float(df_d.iloc[-1]["Open"])
@@ -361,6 +341,7 @@ def run_scan():
                 bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
                 imbalance = int(today_vol * (p_change / 100))
 
+            # Track Imbalance Velocity (Delta check across cycles)
             if sym not in st.session_state.imbalance_history:
                 st.session_state.imbalance_history[sym] = [imbalance]
             else:
@@ -373,25 +354,20 @@ def run_scan():
 
             imb_vs_avg_vol_pct = ((imbalance / avg_vol_1w) * 100) if avg_vol_1w > 0 else 0.0
 
-            ema_3m, box_3m, is_bull_3m, is_bear_3m = compute_smc_matrix_tf(df_3)
-            ema_5m, box_5m, is_bull_5m, is_bear_5m = compute_smc_matrix_tf(df_5)
+            ema_color, box_type, is_bull_smc, is_bear_smc = compute_smc_matrix_5m(df_5)
 
-            dual_green = ("GREEN" in ema_3m) and ("GREEN" in ema_5m)
-            dual_red = ("RED" in ema_3m) and ("RED" in ema_5m)
-            demand_sync = (box_3m == "DEMAND" or box_5m == "DEMAND")
-            supply_sync = (box_3m == "SUPPLY" or box_5m == "SUPPLY")
-
-            if (is_bull_3m or is_bull_5m) and dual_green and vwap_status == "ABOVE (+)" and imbalance > 0:
-                action = "🟢 SMC PRO BUY"
-            elif (is_bear_3m or is_bear_5m) and dual_red and vwap_status == "BELOW (-)" and imbalance < 0:
-                action = "🔴 SMC PRO SELL"
-            elif p_change > 0.35 and dual_green and demand_sync and bs_ratio >= 1.35 and imb_vs_avg_vol_pct > 0.35 and vwap_status == "ABOVE (+)" and imb_trend_positive:
+            # Strict Multi-factor Action Trigger Engine
+            if is_bull_smc and vwap_status == "ABOVE (+)" and imbalance > 0:
+                action = "🟢 SMC PRO BUY (5m)"
+            elif is_bear_smc and vwap_status == "BELOW (-)" and imbalance < 0:
+                action = "🔴 SMC PRO SELL (5m)"
+            elif p_change > 0.4 and bs_ratio >= 1.4 and imb_vs_avg_vol_pct > 0.4 and vwap_status == "ABOVE (+)" and imb_trend_positive:
                 action = "🟢 STRONG BUY"
-            elif p_change < -0.35 and dual_red and supply_sync and bs_ratio <= 0.75 and imb_vs_avg_vol_pct < -0.35 and vwap_status == "BELOW (-)" and imb_trend_negative:
+            elif p_change < -0.4 and bs_ratio <= 0.75 and imb_vs_avg_vol_pct < -0.4 and vwap_status == "BELOW (-)" and imb_trend_negative:
                 action = "🔴 STRONG SELL"
-            elif bs_ratio > 1.75 and dual_green and vwap_status == "ABOVE (+)":
+            elif bs_ratio > 1.75 and vwap_status == "ABOVE (+)" and imbalance > 0:
                 action = "🟢 ACCUMULATION"
-            elif bs_ratio < 0.60 and dual_red and vwap_status == "BELOW (-)":
+            elif bs_ratio < 0.60 and vwap_status == "BELOW (-)" and imbalance < 0:
                 action = "🔴 DISTRIBUTION"
             else:
                 action = "🟡 SIDEWAYS"
@@ -427,27 +403,24 @@ def run_scan():
                 "Price": round(ltp, 2), 
                 "Chg%": f"{p_change:+.2f}%", 
                 "VolChg%": f"{vol_chg_pct:+.2f}%",
-                "EMA(3M)": ema_3m, 
-                "Box(3M)": box_3m,
-                "EMA(5M)": ema_5m, 
-                "Box(5M)": box_5m,
+                "EMA13(5m)": ema_color, 
+                "Box(5m)": box_type,
                 "B/S": bs_ratio, 
                 "Imbalance": imbalance, 
-                "Imb%": f"{imb_vs_avg_vol_pct:+.2f}%",
+                "ImbChg%": f"{imb_vs_avg_vol_pct:+.2f}%",
                 "VWAP": vwap_status, 
                 "Spread": round(target_spread, 2), 
                 "Action": action
             }
 
-            is_high_imb_buy = (bs_ratio >= 1.5 and imb_vs_avg_vol_pct >= 0.5 and vwap_status == "ABOVE (+)" and dual_green)
-            is_high_imb_sell = (bs_ratio <= 0.65 and imb_vs_avg_vol_pct <= -0.5 and vwap_status == "BELOW (-)" and dual_red)
+            full_out.append(record)
 
-            # High Conviction Check
-            if action in ["🟢 SMC PRO BUY", "🔴 SMC PRO SELL", "🟢 STRONG BUY", "🔴 STRONG SELL"] or is_high_imb_buy or is_high_imb_sell:
+            # Filter high probability setups (Strong Buy/Sell, SMC Pro Buy/Sell, or High Imbalance Breakouts)
+            is_high_imbalance_buy = (bs_ratio >= 1.5 and imb_vs_avg_vol_pct >= 0.5 and vwap_status == "ABOVE (+)")
+            is_high_imbalance_sell = (bs_ratio <= 0.65 and imb_vs_avg_vol_pct <= -0.5 and vwap_status == "BELOW (-)")
+
+            if action in ["🟢 SMC PRO BUY (5m)", "🔴 SMC PRO SELL (5m)", "🟢 STRONG BUY", "🔴 STRONG SELL"] or is_high_imbalance_buy or is_high_imbalance_sell:
                 filtered_signals.append(record)
-                high_conviction_symbols.add(sym)
-            else:
-                full_out.append(record)
 
         except Exception:
             continue
@@ -455,7 +428,7 @@ def run_scan():
     return full_out, filtered_signals, nifty_trend
 
 # ==================== STREAMLIT UI ====================
-st.title("⚡ 3M & 5M Quant Live Scanner")
+st.title("⚡ 5M Quant Live Scanner")
 
 header_col1, header_col2, header_col3 = st.columns([1, 1, 1])
 
@@ -463,26 +436,26 @@ with header_col1:
     if st.button("🔄 Refresh Data"):
         st.rerun()
 
-data_remaining, data_conviction, nifty_status = run_scan()
+data_all, data_conviction, nifty_status = run_scan()
 
 with header_col2:
     st.metric("NIFTY 50", nifty_status)
 with header_col3:
     st.metric("Updated", datetime.now().strftime("%H:%M:%S"))
 
-# High Conviction Section (3M + 5M Confluence)
-st.subheader("🎯 High Conviction Setups (Dual-TF Synced)")
+# High Conviction Section
+st.subheader("🎯 High Conviction Setups (SMC / Strong / High Imbalance)")
 if data_conviction:
     df_conv = pd.DataFrame(data_conviction)
     st.dataframe(df_conv, use_container_width=True, hide_index=True)
 else:
-    st.info("⚡ No Dual-Confluence setups active right now (Awaiting 3M + 5M EMA & Box Alignment).")
+    st.info("⚡ No High-Conviction setups found right now (Waiting for valid SMC/STRONG/High-Imbalance triggers).")
 
-# Remaining Market Scanner Watchlist (No Duplicates)
-st.subheader("📊 Other Watchlist Stocks (Sideways / Monitoring)")
-if data_remaining:
-    df_rem = pd.DataFrame(data_remaining)
-    st.dataframe(df_rem, use_container_width=True, hide_index=True)
+# Full Market Scanner Watchlist
+st.subheader("📊 Full Market Scanner")
+if data_all:
+    df_all = pd.DataFrame(data_all)
+    st.dataframe(df_all, use_container_width=True, hide_index=True)
 else:
     st.warning("Fetching market data... please wait or click refresh.")
 
