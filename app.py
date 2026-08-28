@@ -1,5 +1,5 @@
 # =============================================================================
-# 1. ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE APP)
+# ADVANCED SMC + COBI QUANT SCANNER (FIXED STREAMLIT MOBILE VERSION)
 # =============================================================================
 import math
 import time
@@ -11,7 +11,6 @@ import requests
 import yfinance as yf
 import streamlit as st
 
-# Setup Streamlit Mobile Viewport & Theme
 st.set_page_config(
     page_title="SMC + COBI Quant Scanner",
     page_icon="⚡",
@@ -19,12 +18,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Silent unwanted internal logs
 warnings.filterwarnings("ignore")
 import logging
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# Mobile-Optimized CSS to prevent page jump and handle layout
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; padding-bottom: 1rem; padding-left: 0.5rem; padding-right: 0.5rem; }
@@ -34,7 +31,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Configuration Parameters
 PRICE_MIN = 300.0
 PRICE_MAX = 600.0
 VWAP_BUFFER_PCT = 0.15
@@ -78,18 +74,17 @@ def create_robust_nse_session():
         "Referer": "https://www.nseindia.com",
         "Connection": "keep-alive"
     })
-    try: session.get("https://www.nseindia.com", timeout=3)
-    except: pass
+    try: 
+        session.get("https://www.nseindia.com", timeout=2)
+    except: 
+        pass
     return session
 
-# =============================================================================
-# LEVEL-2 ORDER BOOK QUANT ENGINE (OBIR, WOB, MPDR, COBI)
-# =============================================================================
 def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
     try:
         formatted_sym = requests.utils.quote(symbol)
         url = f"https://www.nseindia.com/api/quote-equity?symbol={formatted_sym}"
-        res = session.get(url, timeout=2.0)
+        res = session.get(url, timeout=1.5)
         if res.status_code == 200:
             data = res.json()
             market_dept = data.get("marketDeptOrderBook", {})
@@ -132,11 +127,8 @@ def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
     imbalance = int(today_vol * (p_change / 100))
     return bs_ratio, imbalance, synth_cobi, False
 
-# =============================================================================
-# EXACT PINE SCRIPT SMC ENGINE (PERSISTENCE & ZONE MITIGATION)
-# =============================================================================
 def evaluate_pine_indicator(df_tf):
-    if len(df_tf) < 30:
+    if len(df_tf) < 20:
         return "YELLOW", "NONE", False, False
 
     df = df_tf.copy()
@@ -152,7 +144,7 @@ def evaluate_pine_indicator(df_tf):
     atr, rsi, ema13 = df['ATR14'].values, df['RSI14'].values, df['EMA13'].values
     ema_up, ema_dn = df['EMA13_Up'].values, df['EMA13_Dn'].values
 
-    p_smc, fvgMinAtr, stateLife = 5, 0.1, 30
+    p_smc, fvgMinAtr, stateLife = 4, 0.1, 25
     bullState, bullBars = 0, 0
     bearState, bearBars = 0, 0
     trendSMC = 0
@@ -261,17 +253,26 @@ def evaluate_pine_indicator(df_tf):
 
     return ema_color, box_status, is_bullish_entry, is_bearish_entry
 
-# =============================================================================
-# DATA FETCHING & ANALYSIS WORKER
-# =============================================================================
+def extract_stock_df(multi_df, sym_str):
+    try:
+        if isinstance(multi_df.columns, pd.MultiIndex):
+            if sym_str in multi_df.columns.levels[0]:
+                return multi_df[sym_str].dropna()
+            elif sym_str in multi_df.columns.levels[1]:
+                return multi_df.xs(sym_str, axis=1, level=1).dropna()
+        else:
+            return multi_df.dropna()
+    except:
+        pass
+    return pd.DataFrame()
+
 def fetch_scan_results():
     session = create_robust_nse_session()
     yf_symbols = [f"{s}.NS" for s in WATCHLIST]
 
     try:
-        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", progress=False, timeout=8)
-        data_3m = yf.download(yf_symbols, period="5d", interval="2m", group_by="ticker", progress=False, timeout=8)
-        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", progress=False, timeout=8)
+        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
+        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
     except:
         return [], []
 
@@ -281,14 +282,15 @@ def fetch_scan_results():
     for sym in WATCHLIST:
         t_str = f"{sym}.NS"
         try:
-            df_d = data_daily[t_str].dropna() if (isinstance(data_daily.columns, pd.MultiIndex) and t_str in data_daily.columns.levels[0]) else data_daily.dropna()
-            df_3 = data_3m[t_str].dropna() if (isinstance(data_3m.columns, pd.MultiIndex) and t_str in data_3m.columns.levels[0]) else data_3m.dropna()
-            df_5 = data_5m[t_str].dropna() if (isinstance(data_5m.columns, pd.MultiIndex) and t_str in data_5m.columns.levels[0]) else data_5m.dropna()
+            df_d = extract_stock_df(data_daily, t_str)
+            df_5 = extract_stock_df(data_5m, t_str)
 
-            if len(df_d) < 2 or len(df_5) < 30: continue
+            if len(df_d) < 2 or len(df_5) < 20:
+                continue
 
             ltp = float(df_5.iloc[-1]["Close"])
-            if not (PRICE_MIN <= ltp <= PRICE_MAX): continue
+            if not (PRICE_MIN <= ltp <= PRICE_MAX):
+                continue
 
             prev_close = float(df_d.iloc[-2]["Close"])
             p_change = ((ltp - prev_close) / prev_close) * 100
@@ -304,7 +306,10 @@ def fetch_scan_results():
 
             bs_ratio, imbalance, cobi_val, has_depth = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
 
-            ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 30 else df_5)
+            # Robust Resampling: 5m -> 15m proxy for multi-timeframe confirmation
+            df_3 = df_5.resample('15min').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+            
+            ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 15 else df_5)
             ema5_col, box5_t, is_bull_5m, is_bear_5m = evaluate_pine_indicator(df_5)
 
             tr = pd.concat([df_d["High"] - df_d["Low"], (df_d["High"] - df_d["Close"].shift(1)).abs(), (df_d["Low"] - df_d["Close"].shift(1)).abs()], axis=1).max(axis=1)
@@ -315,11 +320,11 @@ def fetch_scan_results():
             elif (is_bear_3m or is_bear_5m) and cobi_val <= -0.35 and vwap_status == "BELOW (-)":
                 action = "🔻 INSTITUTIONAL PRO SELL"
             elif is_bull_3m and is_bull_5m:
-                action = "🟢 SMC PRO BUY (3m+5m)"
+                action = "🟢 SMC PRO BUY (Multi-TF)"
             elif is_bull_3m or is_bull_5m:
                 action = "🟢 SMC PRO BUY"
             elif is_bear_3m and is_bear_5m:
-                action = "🔴 SMC PRO SELL (3m+5m)"
+                action = "🔴 SMC PRO SELL (Multi-TF)"
             elif is_bear_3m or is_bear_5m:
                 action = "🔴 SMC PRO SELL"
             elif cobi_val >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
@@ -361,35 +366,29 @@ def fetch_scan_results():
     return filtered_rows, full_rows
 
 # =============================================================================
-# STREAMLIT UI WITH SCROLL-FREE AUTO REFRESH
+# STREAMLIT UI
 # =============================================================================
-st.title("⚡ SMC (3m/5m) + COBI Confluence Scanner")
+st.title("⚡ SMC + COBI Quant Scanner")
 
-# Top Metrics Row
 col1, col2 = st.columns([1, 1])
 with col1:
     st.metric("Status", "Active [Rs 300 - 600]")
 with col2:
     st.metric("Last Update", datetime.now().strftime("%H:%M:%S"))
 
-# Persistent Render Slot (Stops screen jumping)
-main_slot = st.empty()
-
 filtered_data, full_data = fetch_scan_results()
 
-with main_slot.container():
-    st.subheader("🎯 High Conviction Trades (Institutional / SMC Pro / Strong)")
-    if filtered_data:
-        st.dataframe(pd.DataFrame(filtered_data), use_container_width=True, hide_index=True)
-    else:
-        st.info("⚡ No High-Conviction setups currently triggered in Rs 300-600 range.")
+st.subheader("🎯 High Conviction Trades (Institutional / SMC Pro / Strong)")
+if filtered_data:
+    st.dataframe(pd.DataFrame(filtered_data), use_container_width=True, hide_index=True)
+else:
+    st.info("⚡ No High-Conviction setups currently triggered in Rs 300-600 range.")
 
-    st.subheader("📊 Other Watchlist Stocks (No Duplication)")
-    if full_data:
-        st.dataframe(pd.DataFrame(full_data), use_container_width=True, hide_index=True)
-    else:
-        st.warning("Fetching market data or no stocks currently in range...")
+st.subheader("📊 Other Watchlist Stocks (No Duplication)")
+if full_data:
+    st.dataframe(pd.DataFrame(full_data), use_container_width=True, hide_index=True)
+else:
+    st.warning("Fetching market data... please wait.")
 
-# Background sleep & auto-refresh
 time.sleep(12)
 st.rerun()
