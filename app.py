@@ -1,5 +1,5 @@
 # =============================================================================
-# ADVANCED SMC + COBI QUANT SCANNER (FIXED STREAMLIT MOBILE VERSION)
+# ADVANCED SMC + COBI QUANT SCANNER (FIXED INSTANT-RENDER MOBILE ENGINE)
 # =============================================================================
 import math
 import time
@@ -11,8 +11,9 @@ import requests
 import yfinance as yf
 import streamlit as st
 
+# Setup Streamlit Mobile Viewport
 st.set_page_config(
-    page_title="SMC + COBI Quant Scanner",
+    page_title="SMC + COBI Scanner",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -22,12 +23,12 @@ warnings.filterwarnings("ignore")
 import logging
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
+# Mobile CSS (No page jump / Clean tables)
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem; padding-bottom: 1rem; padding-left: 0.5rem; padding-right: 0.5rem; }
-    .metric-card { background-color: rgba(128, 128, 128, 0.1); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
-    div[data-testid="stDataFrame"] { width: 100%; font-size: 11.5px !important; }
-    table { font-size: 11.5px !important; }
+    .block-container { padding-top: 0.8rem; padding-bottom: 1rem; padding-left: 0.4rem; padding-right: 0.4rem; }
+    div[data-testid="stDataFrame"] { width: 100%; }
+    table { font-size: 11px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -43,6 +44,7 @@ WATCHLIST = [
     "AMBUJACEM", "JUBLFOOD", "MANAPPURAM", "LICHSGFIN", "CUPID", "RELAXO", "ZAGGLE"
 ]
 
+# ==================== MATH & SMC ENGINE ====================
 def clean_num(x):
     if x is None: return 0.0
     try: return float(str(x).replace(",", "").replace("%", ""))
@@ -74,17 +76,15 @@ def create_robust_nse_session():
         "Referer": "https://www.nseindia.com",
         "Connection": "keep-alive"
     })
-    try: 
-        session.get("https://www.nseindia.com", timeout=2)
-    except: 
-        pass
+    try: session.get("https://www.nseindia.com", timeout=1.5)
+    except: pass
     return session
 
 def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
     try:
         formatted_sym = requests.utils.quote(symbol)
         url = f"https://www.nseindia.com/api/quote-equity?symbol={formatted_sym}"
-        res = session.get(url, timeout=1.5)
+        res = session.get(url, timeout=1.2)
         if res.status_code == 200:
             data = res.json()
             market_dept = data.get("marketDeptOrderBook", {})
@@ -100,7 +100,6 @@ def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
 
             if len(bids) > 0 and len(asks) > 0 and (buy_q > 0 or sell_q > 0):
                 obir = (buy_q - sell_q) / (buy_q + sell_q) if (buy_q + sell_q) > 0 else 0.0
-
                 depth_len = min(len(bids), len(asks))
                 depth_weights = 1.0 / np.arange(1, depth_len + 1)
                 w_bid_sum = np.sum([b[1] for b in bids[:depth_len]] * depth_weights)
@@ -117,7 +116,6 @@ def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
                 cobi_score = (0.30 * obir) + (0.40 * wob) + (0.30 * mpdr)
                 bs_ratio = round(buy_q / (sell_q if sell_q > 0 else 1), 2)
                 imbalance = int(buy_q - sell_q)
-
                 return bs_ratio, imbalance, cobi_score, True
     except:
         pass
@@ -128,8 +126,8 @@ def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
     return bs_ratio, imbalance, synth_cobi, False
 
 def evaluate_pine_indicator(df_tf):
-    if len(df_tf) < 20:
-        return "YELLOW", "NONE", False, False
+    if len(df_tf) < 15:
+        return "🟡 YELLOW", "NONE", False, False
 
     df = df_tf.copy()
     df['EMA13'] = df['Close'].ewm(span=13, adjust=False).mean()
@@ -137,7 +135,6 @@ def evaluate_pine_indicator(df_tf):
     df['EMA13_Dn'] = df['EMA13'] < df['EMA13'].shift(1)
     df['RSI14'] = calculate_rsi(df['Close'], 14)
     df['ATR14'] = calculate_atr(df, 14)
-    df['Vol_SMA14'] = df['Volume'].rolling(14).mean()
 
     n = len(df)
     highs, lows, closes, opens = df['High'].values, df['Low'].values, df['Close'].values, df['Open'].values
@@ -153,9 +150,7 @@ def evaluate_pine_indicator(df_tf):
     p_mat = 2
     mergeThresh = 0.3
     maxTests = 4
-
-    s_Boxes = []
-    d_Boxes = []
+    s_Boxes, d_Boxes = [], []
 
     for i in range(n):
         bullBars += 1
@@ -204,35 +199,25 @@ def evaluate_pine_indicator(df_tf):
 
         if i >= 2 * p_mat:
             pm = i - p_mat
-            is_pm_hi = all(highs[pm] > highs[pm-k] for k in range(1, p_mat + 1)) and all(highs[pm] > highs[pm+k] for k in range(1, p_mat + 1)):
-            if is_pm_hi:
-                topLvl = highs[pm]
-                botLvl = max(opens[pm], closes[pm])
-                isDup = any(b['active'] and abs(b['top'] - topLvl) < (atr[i] * mergeThresh) for b in s_Boxes)
-                if not isDup:
+            if all(highs[pm] > highs[pm-k] for k in range(1, p_mat + 1)) and all(highs[pm] > highs[pm+k] for k in range(1, p_mat + 1)):
+                topLvl, botLvl = highs[pm], max(opens[pm], closes[pm])
+                if not any(b['active'] and abs(b['top'] - topLvl) < (atr[i] * mergeThresh) for b in s_Boxes):
                     s_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
 
-            is_pm_lo = all(lows[pm] < lows[pm-k] for k in range(1, p_mat + 1)) and all(lows[pm] < lows[pm+k] for k in range(1, p_mat + 1)):
-            if is_pm_lo:
-                topLvl = min(opens[pm], closes[pm])
-                botLvl = lows[pm]
-                isDup = any(b['active'] and abs(b['bot'] - botLvl) < (atr[i] * mergeThresh) for b in d_Boxes)
-                if not isDup:
+            if all(lows[pm] < lows[pm-k] for k in range(1, p_mat + 1)) and all(lows[pm] < lows[pm+k] for k in range(1, p_mat + 1)):
+                topLvl, botLvl = min(opens[pm], closes[pm]), lows[pm]
+                if not any(b['active'] and abs(b['bot'] - botLvl) < (atr[i] * mergeThresh) for b in d_Boxes):
                     d_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
 
         for b in s_Boxes:
             if b['active']:
-                if highs[i] > b['bot'] and (i > 0 and highs[i-1] <= b['bot']):
-                    b['tests'] += 1
-                if highs[i] > b['top'] or b['tests'] >= maxTests:
-                    b['active'] = False
+                if highs[i] > b['bot'] and (i > 0 and highs[i-1] <= b['bot']): b['tests'] += 1
+                if highs[i] > b['top'] or b['tests'] >= maxTests: b['active'] = False
 
         for b in d_Boxes:
             if b['active']:
-                if lows[i] < b['top'] and (i > 0 and lows[i-1] >= b['top']):
-                    b['tests'] += 1
-                if lows[i] < b['bot'] or b['tests'] >= maxTests:
-                    b['active'] = False
+                if lows[i] < b['top'] and (i > 0 and lows[i-1] >= b['top']): b['tests'] += 1
+                if lows[i] < b['bot'] or b['tests'] >= maxTests: b['active'] = False
 
     recent_supply = any(b['active'] and (n - 1 - b['created_bar'] <= 3) for b in s_Boxes)
     recent_demand = any(b['active'] and (n - 1 - b['created_bar'] <= 3) for b in d_Boxes)
@@ -253,39 +238,55 @@ def evaluate_pine_indicator(df_tf):
 
     return ema_color, box_status, is_bullish_entry, is_bearish_entry
 
-def extract_stock_df(multi_df, sym_str):
+def get_df_from_download(data, symbol):
     try:
-        if isinstance(multi_df.columns, pd.MultiIndex):
-            if sym_str in multi_df.columns.levels[0]:
-                return multi_df[sym_str].dropna()
-            elif sym_str in multi_df.columns.levels[1]:
-                return multi_df.xs(sym_str, axis=1, level=1).dropna()
+        if isinstance(data.columns, pd.MultiIndex):
+            if symbol in data.columns.levels[0]:
+                return data[symbol].dropna()
+            elif symbol in data.columns.levels[1]:
+                return data.xs(symbol, axis=1, level=1).dropna()
         else:
-            return multi_df.dropna()
+            return data.dropna()
     except:
         pass
     return pd.DataFrame()
 
-def fetch_scan_results():
-    session = create_robust_nse_session()
-    yf_symbols = [f"{s}.NS" for s in WATCHLIST]
+# ==================== STREAMLIT UI (RENDER FIRST) ====================
+st.title("⚡ SMC + COBI Quant Scanner")
 
-    try:
-        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
-        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
-    except:
-        return [], []
+col_top1, col_top2 = st.columns([1, 1])
+with col_top1:
+    st.metric("Filter Range", f"Rs {int(PRICE_MIN)} - {int(PRICE_MAX)}")
+with col_top2:
+    st.metric("Last Check", datetime.now().strftime("%H:%M:%S"))
 
-    full_rows = []
-    filtered_rows = []
+status_placeholder = st.empty()
+high_conviction_placeholder = st.empty()
+full_list_placeholder = st.empty()
 
+# Fetch Data with Progress
+with status_placeholder:
+    with st.spinner("🔄 Fetching live NSE market data..."):
+        session = create_robust_nse_session()
+        yf_symbols = [f"{s}.NS" for s in WATCHLIST]
+        
+        try:
+            data_daily = yf.download(yf_symbols, period="10d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, timeout=8)
+            data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=8)
+        except Exception:
+            data_daily, data_5m = pd.DataFrame(), pd.DataFrame()
+
+filtered_rows = []
+full_rows = []
+
+if not data_daily.empty and not data_5m.empty:
     for sym in WATCHLIST:
         t_str = f"{sym}.NS"
         try:
-            df_d = extract_stock_df(data_daily, t_str)
-            df_5 = extract_stock_df(data_5m, t_str)
+            df_d = get_df_from_download(data_daily, t_str)
+            df_5 = get_df_from_download(data_5m, t_str)
 
-            if len(df_d) < 2 or len(df_5) < 20:
+            if len(df_d) < 2 or len(df_5) < 15:
                 continue
 
             ltp = float(df_5.iloc[-1]["Close"])
@@ -304,11 +305,10 @@ def fetch_scan_results():
             vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
             vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
 
-            bs_ratio, imbalance, cobi_val, has_depth = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
+            bs_ratio, imbalance, cobi_val, _ = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
 
-            # Robust Resampling: 5m -> 15m proxy for multi-timeframe confirmation
             df_3 = df_5.resample('15min').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
-            
+
             ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 15 else df_5)
             ema5_col, box5_t, is_bull_5m, is_bear_5m = evaluate_pine_indicator(df_5)
 
@@ -359,36 +359,27 @@ def fetch_scan_results():
                 filtered_rows.append(row_data)
             else:
                 full_rows.append(row_data)
-
-        except:
+        except Exception:
             continue
 
-    return filtered_rows, full_rows
+# Clear the spinner
+status_placeholder.empty()
 
-# =============================================================================
-# STREAMLIT UI
-# =============================================================================
-st.title("⚡ SMC + COBI Quant Scanner")
+# Display Results
+with high_conviction_placeholder.container():
+    st.subheader("🎯 High Conviction Trades")
+    if filtered_rows:
+        st.dataframe(pd.DataFrame(filtered_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("⚡ No High-Conviction setups found right now in Rs 300-600 range.")
 
-col1, col2 = st.columns([1, 1])
-with col1:
-    st.metric("Status", "Active [Rs 300 - 600]")
-with col2:
-    st.metric("Last Update", datetime.now().strftime("%H:%M:%S"))
+with full_list_placeholder.container():
+    st.subheader("📊 Other Watchlist Stocks (No Duplicates)")
+    if full_rows:
+        st.dataframe(pd.DataFrame(full_rows), use_container_width=True, hide_index=True)
+    else:
+        st.warning("No other stocks currently match the Rs 300 - 600 filter.")
 
-filtered_data, full_data = fetch_scan_results()
-
-st.subheader("🎯 High Conviction Trades (Institutional / SMC Pro / Strong)")
-if filtered_data:
-    st.dataframe(pd.DataFrame(filtered_data), use_container_width=True, hide_index=True)
-else:
-    st.info("⚡ No High-Conviction setups currently triggered in Rs 300-600 range.")
-
-st.subheader("📊 Other Watchlist Stocks (No Duplication)")
-if full_data:
-    st.dataframe(pd.DataFrame(full_data), use_container_width=True, hide_index=True)
-else:
-    st.warning("Fetching market data... please wait.")
-
+# Live auto-refresh
 time.sleep(12)
 st.rerun()
