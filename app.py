@@ -1,5 +1,5 @@
 # =============================================================================
-# ADVANCED SMC + COBI QUANT SCANNER (FAST & CLOUD-OPTIMIZED ENGINE)
+# ADVANCED SMC + COBI QUANT SCANNER (STREAMLIT CACHED & BULLETPROOF ENGINE)
 # =============================================================================
 import math
 import time
@@ -11,7 +11,6 @@ import requests
 import yfinance as yf
 import streamlit as st
 
-# Setup Streamlit Viewport
 st.set_page_config(
     page_title="SMC + COBI Scanner",
     page_icon="⚡",
@@ -23,11 +22,10 @@ warnings.filterwarnings("ignore")
 import logging
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# Mobile-Optimized CSS
 st.markdown("""
 <style>
     .block-container { padding-top: 0.8rem; padding-bottom: 1rem; padding-left: 0.4rem; padding-right: 0.4rem; }
-    div[data-testid="stDataFrame"] { width: 100%; }
+    div[data-testid="stDataFrame"] { width: 100%; font-size: 11px !important; }
     table { font-size: 11px !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -44,7 +42,6 @@ WATCHLIST = [
     "AMBUJACEM", "JUBLFOOD", "MANAPPURAM", "LICHSGFIN", "CUPID", "RELAXO", "ZAGGLE"
 ]
 
-# ==================== TECHNICAL MATH HELPERS ====================
 def clean_num(x):
     if x is None: return 0.0
     try: return float(str(x).replace(",", "").replace("%", ""))
@@ -67,13 +64,6 @@ def calculate_atr(df, length=14):
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     return rma(tr, length)
 
-def fetch_cobi_metrics(symbol, p_change, today_vol):
-    synth_cobi = max(min(p_change / 3.0, 1.0), -1.0)
-    bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
-    imbalance = int(today_vol * (p_change / 100))
-    return bs_ratio, imbalance, synth_cobi
-
-# ==================== SMC & ZONE ENGINE ====================
 def evaluate_pine_indicator(df_tf):
     if len(df_tf) < 15:
         return "🟡 YELLOW", "NONE", False, False
@@ -187,36 +177,31 @@ def evaluate_pine_indicator(df_tf):
 
     return ema_color, box_status, is_bullish_entry, is_bearish_entry
 
-# ==================== DATA PROCESSING ====================
-def extract_df(data, symbol):
+@st.cache_data(ttl=15, show_spinner=False)
+def load_all_market_data():
+    tickers = [f"{s}.NS" for s in WATCHLIST]
+    ticker_str = " ".join(tickers)
     try:
-        if isinstance(data.columns, pd.MultiIndex):
-            if symbol in data.columns.levels[0]:
-                return data[symbol].dropna()
-            elif symbol in data.columns.levels[1]:
-                return data.xs(symbol, axis=1, level=1).dropna()
-        else:
-            return data.dropna()
+        df_daily = yf.download(ticker_str, period="10d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+        df_5m = yf.download(ticker_str, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+        return df_daily, df_5m
     except Exception:
-        pass
-    return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
 # ==================== STREAMLIT UI ====================
 st.title("⚡ SMC + COBI Quant Scanner")
 
-col_top1, col_top2 = st.columns([1, 1])
-with col_top1:
-    st.metric("Range Filter", f"Rs {int(PRICE_MIN)} - {int(PRICE_MAX)}")
-with col_top2:
-    st.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
+c1, c2, c3 = st.columns([1, 1, 1])
+with c1:
+    st.metric("Range", f"₹{int(PRICE_MIN)} - ₹{int(PRICE_MAX)}")
+with c2:
+    st.metric("Time", datetime.now().strftime("%H:%M:%S"))
+with c3:
+    if st.button("🔄 Refresh"):
+        st.cache_data.clear()
+        st.rerun()
 
-# Fast Batch Fetch
-yf_symbols = [f"{s}.NS" for s in WATCHLIST]
-try:
-    data_daily = yf.download(yf_symbols, period="10d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
-    data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True)
-except Exception:
-    data_daily, data_5m = pd.DataFrame(), pd.DataFrame()
+data_daily, data_5m = load_all_market_data()
 
 filtered_rows = []
 full_rows = []
@@ -225,29 +210,38 @@ if not data_daily.empty and not data_5m.empty:
     for sym in WATCHLIST:
         t_str = f"{sym}.NS"
         try:
-            df_d = extract_df(data_daily, t_str)
-            df_5 = extract_df(data_5m, t_str)
+            if isinstance(data_daily.columns, pd.MultiIndex):
+                if t_str not in data_daily.columns.levels[0]: continue
+                df_d = data_daily[t_str].dropna()
+            else:
+                df_d = data_daily.dropna()
 
-            if len(df_d) < 2 or len(df_5) < 15:
-                continue
+            if isinstance(data_5m.columns, pd.MultiIndex):
+                if t_str not in data_5m.columns.levels[0]: continue
+                df_5 = data_5m[t_str].dropna()
+            else:
+                df_5 = data_5m.dropna()
 
-            ltp = float(df_5.iloc[-1]["Close"])
-            if not (PRICE_MIN <= ltp <= PRICE_MAX):
-                continue
+            if len(df_d) < 2 or len(df_5) < 15: continue
 
-            prev_close = float(df_d.iloc[-2]["Close"])
+            ltp = float(df_5["Close"].iloc[-1])
+            if not (PRICE_MIN <= ltp <= PRICE_MAX): continue
+
+            prev_close = float(df_d["Close"].iloc[-2])
             p_change = ((ltp - prev_close) / prev_close) * 100
 
-            today_vol = float(df_d.iloc[-1]["Volume"])
+            today_vol = float(df_d["Volume"].iloc[-1])
             avg_vol_1w = df_d["Volume"].iloc[:-1].mean() if len(df_d) > 1 else today_vol
             vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0
 
-            high, low, close = float(df_d.iloc[-1]["High"]), float(df_d.iloc[-1]["Low"]), float(df_d.iloc[-1]["Close"])
+            high, low, close = float(df_d["High"].iloc[-1]), float(df_d["Low"].iloc[-1]), float(df_d["Close"].iloc[-1])
             approx_vwap = (high + low + close) / 3
             vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
             vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
 
-            bs_ratio, imbalance, cobi_val = fetch_cobi_metrics(sym, p_change, today_vol)
+            synth_cobi = max(min(p_change / 3.0, 1.0), -1.0)
+            bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
+            imbalance = int(today_vol * (p_change / 100))
 
             df_3 = df_5.resample('15min').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
 
@@ -257,9 +251,9 @@ if not data_daily.empty and not data_5m.empty:
             tr = pd.concat([df_d["High"] - df_d["Low"], (df_d["High"] - df_d["Close"].shift(1)).abs(), (df_d["Low"] - df_d["Close"].shift(1)).abs()], axis=1).max(axis=1)
             spread = float(tr.iloc[-5:].mean()) * 1.2 if len(tr) >= 5 else 5.0
 
-            if (is_bull_3m or is_bull_5m) and cobi_val >= 0.35 and vwap_status == "ABOVE (+)":
+            if (is_bull_3m or is_bull_5m) and synth_cobi >= 0.35 and vwap_status == "ABOVE (+)":
                 action = "🚀 INSTITUTIONAL PRO BUY"
-            elif (is_bear_3m or is_bear_5m) and cobi_val <= -0.35 and vwap_status == "BELOW (-)":
+            elif (is_bear_3m or is_bear_5m) and synth_cobi <= -0.35 and vwap_status == "BELOW (-)":
                 action = "🔻 INSTITUTIONAL PRO SELL"
             elif is_bull_3m and is_bull_5m:
                 action = "🟢 SMC PRO BUY (Multi-TF)"
@@ -269,13 +263,13 @@ if not data_daily.empty and not data_5m.empty:
                 action = "🔴 SMC PRO SELL (Multi-TF)"
             elif is_bear_3m or is_bear_5m:
                 action = "🔴 SMC PRO SELL"
-            elif cobi_val >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
+            elif synth_cobi >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
                 action = "🟢 STRONG BUY"
-            elif cobi_val <= -0.40 and p_change < -0.5 and vol_chg_pct > 10:
+            elif synth_cobi <= -0.40 and p_change < -0.5 and vol_chg_pct > 10:
                 action = "🔴 STRONG SELL"
-            elif cobi_val > 0.25 and vwap_status == "ABOVE (+)":
+            elif synth_cobi > 0.25 and vwap_status == "ABOVE (+)":
                 action = "🟢 ACCUMULATION"
-            elif cobi_val < -0.25 and vwap_status == "BELOW (-)":
+            elif synth_cobi < -0.25 and vwap_status == "BELOW (-)":
                 action = "🔴 DISTRIBUTION"
             else:
                 action = "🟡 SIDEWAYS"
@@ -291,7 +285,7 @@ if not data_daily.empty and not data_5m.empty:
                 "Box(5m)": box5_t,
                 "B/S": bs_ratio,
                 "Imbalance": imbalance,
-                "COBI": round(cobi_val, 2),
+                "COBI": round(synth_cobi, 2),
                 "VWAP": vwap_status,
                 "Spread": round(spread, 2),
                 "Action": action
@@ -304,19 +298,23 @@ if not data_daily.empty and not data_5m.empty:
         except Exception:
             continue
 
-# Display Tables
 st.subheader("🎯 High Conviction Trades")
 if filtered_rows:
     st.dataframe(pd.DataFrame(filtered_rows), use_container_width=True, hide_index=True)
 else:
-    st.info("⚡ No High-Conviction setups found right now in Rs 300-600 range.")
+    st.info("⚡ No High-Conviction setups currently in ₹300-₹600 range.")
 
 st.subheader("📊 Other Watchlist Stocks (No Duplicates)")
 if full_rows:
     st.dataframe(pd.DataFrame(full_rows), use_container_width=True, hide_index=True)
 else:
-    st.warning("No other stocks currently match the Rs 300 - 600 filter.")
+    st.warning("No other stocks currently match the filter range.")
 
-# Smooth 12s Auto Refresh
-time.sleep(12)
-st.rerun()
+# Background Auto-Refresh via JavaScript timer to eliminate page blanking
+st.markdown("""
+    <script>
+        setTimeout(function() {
+            window.parent.location.reload();
+        }, 15000);
+    </script>
+""", unsafe_allow_html=True)
