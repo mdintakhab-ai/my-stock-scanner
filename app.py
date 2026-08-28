@@ -1,11 +1,10 @@
 # =============================================================================
 # 1. DEPENDENCY INSTALLATION
 # =============================================================================
-# Run this line in terminal/notebook before executing script:
-# pip install yfinance pandas numpy requests rich
+!pip install yfinance pandas numpy requests -q
 
 # =============================================================================
-# 2. ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE/GITHUB READY)
+# 2. ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE/SMOOTH UI)
 # =============================================================================
 import math
 import time
@@ -17,14 +16,7 @@ import pandas as pd
 import numpy as np
 import requests
 import yfinance as yf
-
-# Visual Rendering Optimization for Mobile Screen Stability
-from rich.console import Console
-from rich.live import Live
-from rich.table import Table
-from rich.panel import Panel
-from rich.layout import Layout
-from rich import box
+from IPython.display import display, HTML
 
 warnings.filterwarnings("ignore")
 import logging
@@ -217,21 +209,21 @@ def evaluate_pine_indicator(df_tf):
         # Box Detection Engine
         if i >= 2 * p_mat:
             pm = i - p_mat
-            is_pm_hi = all(highs[pm] > highs[pm-k] for k in range(1, p_mat + 1)) and all(highs[pm] > highs[pm+k] for k in range(1, p_mat + 1))
-            if is_pm_hi:
-                topLvl = highs[pm]
-                botLvl = max(opens[pm], closes[pm])
-                isDup = any(b['active'] and abs(b['top'] - topLvl) < (atr[i] * mergeThresh) for b in s_Boxes)
-                if not isDup:
-                    s_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
+            is_pm_hi = all(highs[pm] > highs[pm-k] for k in range(1, p_mat + 1)) and all(highs[pm] > highs[pm+k] for k in range(1, p_mat + 1)):
+                if is_pm_hi:
+                    topLvl = highs[pm]
+                    botLvl = max(opens[pm], closes[pm])
+                    isDup = any(b['active'] and abs(b['top'] - topLvl) < (atr[i] * mergeThresh) for b in s_Boxes)
+                    if not isDup:
+                        s_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
 
-            is_pm_lo = all(lows[pm] < lows[pm-k] for k in range(1, p_mat + 1)) and all(lows[pm] < lows[pm+k] for k in range(1, p_mat + 1))
-            if is_pm_lo:
-                topLvl = min(opens[pm], closes[pm])
-                botLvl = lows[pm]
-                isDup = any(b['active'] and abs(b['bot'] - botLvl) < (atr[i] * mergeThresh) for b in d_Boxes)
-                if not isDup:
-                    d_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
+            is_pm_lo = all(lows[pm] < lows[pm-k] for k in range(1, p_mat + 1)) and all(lows[pm] < lows[pm+k] for k in range(1, p_mat + 1)):
+                if is_pm_lo:
+                    topLvl = min(opens[pm], closes[pm])
+                    botLvl = lows[pm]
+                    isDup = any(b['active'] and abs(b['bot'] - botLvl) < (atr[i] * mergeThresh) for b in d_Boxes)
+                    if not isDup:
+                        d_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
 
         # Mitigation & Zone Break Engine
         for b in s_Boxes:
@@ -268,137 +260,150 @@ def evaluate_pine_indicator(df_tf):
     return ema_color, box_status, is_bullish_entry, is_bearish_entry
 
 # =============================================================================
-# MOBILE ZERO-JITTER LIVE RENDERER
-# =============================================================================
-console = Console()
-
-def generate_table(title, rows):
-    table = Table(title=title, box=box.ROUNDED, expand=True, show_lines=True)
-    table.add_column("Symbol", style="bold cyan", no_wrap=True)
-    table.add_column("Price", justify="right")
-    table.add_column("Chg%", justify="right")
-    table.add_column("Vol%", justify="right")
-    table.add_column("EMA3m", justify="center")
-    table.add_column("Box3m", justify="center")
-    table.add_column("EMA5m", justify="center")
-    table.add_column("Box5m", justify="center")
-    table.add_column("B/S", justify="right")
-    table.add_column("Imbalance", justify="right")
-    table.add_column("COBI", justify="right")
-    table.add_column("VWAP", justify="center")
-    table.add_column("Spread", justify="right")
-    table.add_column("Action", style="bold yellow")
-
-    for r in rows:
-        table.add_row(*r)
-    return table
-
-# =============================================================================
-# LIVE MONITORING SCANNER LOOP
+# LIVE MONITORING SCANNER LOOP (SMOOTH NON-JUMPING MOBILE UI)
 # =============================================================================
 session = create_robust_nse_session()
 yf_symbols = [f"{s}.NS" for s in WATCHLIST]
 cycle = 1
 
-with Live(console=console, refresh_per_second=1, auto_refresh=True) as live:
-    while True:
-        try:
-            data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", progress=False, timeout=8)
-            data_3m = yf.download(yf_symbols, period="5d", interval="2m", group_by="ticker", progress=False, timeout=8)
-            data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", progress=False, timeout=8)
+# Setup a static display handle to prevent screen jumping/flickering
+display_handle = display(HTML("<div style='color:#bbb;font-family:sans-serif;'>Initializing Mobile SMC Scanner Engine...</div>"), display_id=True)
 
-            full_rows = []
-            filtered_rows = []
+while True:
+    try:
+        data_daily = yf.download(yf_symbols, period="15d", interval="1d", group_by="ticker", progress=False, timeout=8)
+        data_3m = yf.download(yf_symbols, period="5d", interval="2m", group_by="ticker", progress=False, timeout=8)
+        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", progress=False, timeout=8)
 
-            for sym in WATCHLIST:
-                t_str = f"{sym}.NS"
-                try:
-                    df_d = data_daily[t_str].dropna() if (isinstance(data_daily.columns, pd.MultiIndex) and t_str in data_daily.columns.levels[0]) else data_daily.dropna()
-                    df_3 = data_3m[t_str].dropna() if (isinstance(data_3m.columns, pd.MultiIndex) and t_str in data_3m.columns.levels[0]) else data_3m.dropna()
-                    df_5 = data_5m[t_str].dropna() if (isinstance(data_5m.columns, pd.MultiIndex) and t_str in data_5m.columns.levels[0]) else data_5m.dropna()
+        cards_all = []
+        cards_conviction = []
 
-                    if len(df_d) < 2 or len(df_5) < 30: continue
+        for sym in WATCHLIST:
+            t_str = f"{sym}.NS"
+            try:
+                df_d = data_daily[t_str].dropna() if (isinstance(data_daily.columns, pd.MultiIndex) and t_str in data_daily.columns.levels[0]) else data_daily.dropna()
+                df_3 = data_3m[t_str].dropna() if (isinstance(data_3m.columns, pd.MultiIndex) and t_str in data_3m.columns.levels[0]) else data_3m.dropna()
+                df_5 = data_5m[t_str].dropna() if (isinstance(data_5m.columns, pd.MultiIndex) and t_str in data_5m.columns.levels[0]) else data_5m.dropna()
 
-                    ltp = float(df_5.iloc[-1]["Close"])
-                    if not (PRICE_MIN <= ltp <= PRICE_MAX): continue
+                if len(df_d) < 2 or len(df_5) < 30: continue
 
-                    prev_close = float(df_d.iloc[-2]["Close"])
-                    p_change = ((ltp - prev_close) / prev_close) * 100
+                ltp = float(df_5.iloc[-1]["Close"])
+                if not (PRICE_MIN <= ltp <= PRICE_MAX): continue
 
-                    today_vol = float(df_d.iloc[-1]["Volume"])
-                    avg_vol_1w = df_d["Volume"].iloc[:-1].mean() if len(df_d) > 1 else today_vol
-                    vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0
+                prev_close = float(df_d.iloc[-2]["Close"])
+                p_change = ((ltp - prev_close) / prev_close) * 100
 
-                    high, low, close = float(df_d.iloc[-1]["High"]), float(df_d.iloc[-1]["Low"]), float(df_d.iloc[-1]["Close"])
-                    approx_vwap = (high + low + close) / 3
-                    vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
-                    vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
+                today_vol = float(df_d.iloc[-1]["Volume"])
+                avg_vol_1w = df_d["Volume"].iloc[:-1].mean() if len(df_d) > 1 else today_vol
+                vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0
 
-                    # Level-2 COBI Calculation
-                    bs_ratio, imbalance, cobi_val, has_depth = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
-                    imb_vs_avg_vol_pct = ((imbalance / avg_vol_1w) * 100) if avg_vol_1w > 0 else 0.0
+                high, low, close = float(df_d.iloc[-1]["High"]), float(df_d.iloc[-1]["Low"]), float(df_d.iloc[-1]["Close"])
+                approx_vwap = (high + low + close) / 3
+                vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
+                vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
 
-                    # Strict Pine Execution
-                    ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 30 else df_5)
-                    ema5_col, box5_t, is_bull_5m, is_bear_5m = evaluate_pine_indicator(df_5)
+                # Level-2 COBI Calculation
+                bs_ratio, imbalance, cobi_val, has_depth = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
+                imb_vs_avg_vol_pct = ((imbalance / avg_vol_1w) * 100) if avg_vol_1w > 0 else 0.0
 
-                    tr = pd.concat([df_d["High"] - df_d["Low"], (df_d["High"] - df_d["Close"].shift(1)).abs(), (df_d["Low"] - df_d["Close"].shift(1)).abs()], axis=1).max(axis=1)
-                    spread = float(tr.iloc[-5:].mean()) * 1.2 if len(tr) >= 5 else 5.0
+                # Strict Pine Execution
+                ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 30 else df_5)
+                ema5_col, box5_t, is_bull_5m, is_bear_5m = evaluate_pine_indicator(df_5)
 
-                    # Confluence Decision Matrix
-                    if (is_bull_3m or is_bull_5m) and cobi_val >= 0.35 and vwap_status == "ABOVE (+)":
-                        action = "🚀 INSTITUTIONAL PRO BUY"
-                    elif (is_bear_3m or is_bear_5m) and cobi_val <= -0.35 and vwap_status == "BELOW (-)":
-                        action = "🔻 INSTITUTIONAL PRO SELL"
-                    elif is_bull_3m and is_bull_5m:
-                        action = "🟢 SMC PRO BUY (3m+5m)"
-                    elif is_bull_3m or is_bull_5m:
-                        action = "🟢 SMC PRO BUY"
-                    elif is_bear_3m and is_bear_5m:
-                        action = "🔴 SMC PRO SELL (3m+5m)"
-                    elif is_bear_3m or is_bear_5m:
-                        action = "🔴 SMC PRO SELL"
-                    elif cobi_val >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
-                        action = "🟢 STRONG BUY"
-                    elif cobi_val <= -0.40 and p_change < -0.5 and vol_chg_pct > 10:
-                        action = "🔴 STRONG SELL"
-                    elif cobi_val > 0.25 and vwap_status == "ABOVE (+)":
-                        action = "🟢 ACCUMULATION"
-                    elif cobi_val < -0.25 and vwap_status == "BELOW (-)":
-                        action = "🔴 DISTRIBUTION"
-                    else:
-                        action = "🟡 SIDEWAYS"
+                tr = pd.concat([df_d["High"] - df_d["Low"], (df_d["High"] - df_d["Close"].shift(1)).abs(), (df_d["Low"] - df_d["Close"].shift(1)).abs()], axis=1).max(axis=1)
+                spread = float(tr.iloc[-5:].mean()) * 1.2 if len(tr) >= 5 else 5.0
 
-                    row_tuple = (
-                        f"{sym}", f"{ltp:.2f}", f"{p_change:+.2f}%", f"{vol_chg_pct:+.2f}%",
-                        f"{ema3_col}", f"{box3_t}", f"{ema5_col}", f"{box5_t}", f"{bs_ratio:.2f}",
-                        f"{imbalance}", f"{cobi_val:+.2f}", f"{vwap_status}", f"{spread:.2f}", f"{action}"
-                    )
+                # Confluence Decision Matrix
+                if (is_bull_3m or is_bull_5m) and cobi_val >= 0.35 and vwap_status == "ABOVE (+)":
+                    action = "🚀 INSTITUTIONAL PRO BUY"
+                elif (is_bear_3m or is_bear_5m) and cobi_val <= -0.35 and vwap_status == "BELOW (-)":
+                    action = "🔻 INSTITUTIONAL PRO SELL"
+                elif is_bull_3m and is_bull_5m:
+                    action = "🟢 SMC PRO BUY (3m+5m)"
+                elif is_bull_3m or is_bull_5m:
+                    action = "🟢 SMC PRO BUY"
+                elif is_bear_3m and is_bear_5m:
+                    action = "🔴 SMC PRO SELL (3m+5m)"
+                elif is_bear_3m or is_bear_5m:
+                    action = "🔴 SMC PRO SELL"
+                elif cobi_val >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
+                    action = "🟢 STRONG BUY"
+                elif cobi_val <= -0.40 and p_change < -0.5 and vol_chg_pct > 10:
+                    action = "🔴 STRONG SELL"
+                elif cobi_val > 0.25 and vwap_status == "ABOVE (+)":
+                    action = "🟢 ACCUMULATION"
+                elif cobi_val < -0.25 and vwap_status == "BELOW (-)":
+                    action = "🔴 DISTRIBUTION"
+                else:
+                    action = "🟡 SIDEWAYS"
 
-                    full_rows.append(row_tuple)
-                    if any(k in action for k in ["INSTITUTIONAL", "SMC PRO", "STRONG"]):
-                        filtered_rows.append(row_tuple)
-                except:
-                    continue
+                # Mobile Responsive Card Block Template
+                card_html = f"""
+                <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:10px 12px; margin-bottom:8px; font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif; color:#c9d1d9;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #21262d; padding-bottom:6px; margin-bottom:6px;">
+                        <span style="font-size:16px; font-weight:700; color:#58a6ff;">{sym}</span>
+                        <span style="font-size:15px; font-weight:700; color:#f0f6fc;">₹{ltp:.2f} 
+                            <span style="font-size:12px; color:{'#3fb950' if p_change >= 0 else '#f85149'};">({p_change:+.2f}%)</span>
+                        </span>
+                    </div>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:4px; font-size:12px;">
+                        <div><b>3m SMC:</b> {ema3_col.replace('🟢 ', '').replace('🔴 ', '').replace('🟡 ', '')} | {box3_t}</div>
+                        <div><b>5m SMC:</b> {ema5_col.replace('🟢 ', '').replace('🔴 ', '').replace('🟡 ', '')} | {box5_t}</div>
+                        <div><b>COBI / B-S:</b> <span style="color:{'#3fb950' if cobi_val > 0 else '#f85149'};">{cobi_val:+.2f}</span> | {bs_ratio}x</div>
+                        <div><b>VWAP:</b> {vwap_status}</div>
+                        <div><b>Vol Chg:</b> {vol_chg_pct:+.1f}%</div>
+                        <div><b>Spread / Imb:</b> {spread:.1f} | {imbalance}</div>
+                    </div>
+                    <div style="margin-top:7px; padding:5px 8px; border-radius:4px; background:#0d1117; font-size:12px; font-weight:600; text-align:center; color:#f0f6fc; border: 1px solid #30363d;">
+                        {action}
+                    </div>
+                </div>
+                """
 
-            # Zero-Jitter UI Update
-            main_table = generate_table(f"📊 SMC (3m/5m) + COBI SCANNER [Rs 300-600] | TIME: {datetime.now().strftime('%H:%M:%S')} | CYCLE: #{cycle}", full_rows)
-            high_table = generate_table("🎯 HIGH CONVICTION TRADES ONLY", filtered_rows)
+                cards_all.append(card_html)
+                if any(k in action for k in ["INSTITUTIONAL", "SMC PRO", "STRONG"]):
+                    cards_conviction.append(card_html)
 
-            layout = Layout()
-            layout.split(
-                Layout(Panel(main_table, border_style="blue")),
-                Layout(Panel(high_table, border_style="green"))
-            )
+            except:
+                continue
 
-            live.update(layout)
+        # Render Content Assembly
+        cur_time = datetime.now().strftime('%H:%M:%S')
+        conviction_body = "".join(cards_conviction) if cards_conviction else "<div style='color:#8b949e; font-size:13px; padding:10px; text-align:center;'>⚡ No High-Conviction setups triggered right now.</div>"
+        all_body = "".join(cards_all) if cards_all else "<div style='color:#8b949e; font-size:13px; padding:10px; text-align:center;'>No active stocks matching criteria.</div>"
 
-            cycle += 1
-            time.sleep(15)
+        full_html = f"""
+        <div style="max-width:480px; margin:auto; background:#0d1117; padding:12px; border-radius:12px; border:1px solid #30363d;">
+            <div style="background:#1f242c; padding:10px; border-radius:8px; margin-bottom:12px; border-left:4px solid #58a6ff;">
+                <div style="font-size:14px; font-weight:700; color:#f0f6fc;">📊 SMC + COBI MOBILE QUANT</div>
+                <div style="font-size:11px; color:#8b949e; margin-top:2px;">Range: ₹300-600 | 🕒 {cur_time} | Cycle: #{cycle}</div>
+            </div>
 
-        except KeyboardInterrupt:
-            console.print("\n[bold red]Scanner stopped by user.[/bold red]")
-            break
-        except:
-            time.sleep(5)
-            continue
+            <div style="font-size:13px; font-weight:700; color:#e3b341; margin-bottom:8px; display:flex; align-items:center; gap:5px;">
+                🎯 HIGH CONVICTION SETUPS ({len(cards_conviction)})
+            </div>
+            {conviction_body}
+
+            <details style="margin-top:12px; background:#161b22; border-radius:8px; padding:8px; border:1px solid #30363d;">
+                <summary style="cursor:pointer; font-size:13px; font-weight:600; color:#58a6ff; outline:none;">
+                    📋 All Watchlist Stocks ({len(cards_all)})
+                </summary>
+                <div style="margin-top:10px;">
+                    {all_body}
+                </div>
+            </details>
+        </div>
+        """
+
+        # In-place UI update (stops layout hopping/jumping completely)
+        display_handle.update(HTML(full_html))
+
+        cycle += 1
+        time.sleep(15)
+
+    except KeyboardInterrupt:
+        print("\nScanner stopped by user.")
+        break
+    except:
+        time.sleep(5)
+        continue
