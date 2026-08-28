@@ -1,5 +1,5 @@
 # =============================================================================
-# ADVANCED SMC + COBI QUANT SCANNER (FIXED INSTANT-RENDER MOBILE ENGINE)
+# ADVANCED SMC + COBI QUANT SCANNER (FAST & CLOUD-OPTIMIZED ENGINE)
 # =============================================================================
 import math
 import time
@@ -11,7 +11,7 @@ import requests
 import yfinance as yf
 import streamlit as st
 
-# Setup Streamlit Mobile Viewport
+# Setup Streamlit Viewport
 st.set_page_config(
     page_title="SMC + COBI Scanner",
     page_icon="⚡",
@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore")
 import logging
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# Mobile CSS (No page jump / Clean tables)
+# Mobile-Optimized CSS
 st.markdown("""
 <style>
     .block-container { padding-top: 0.8rem; padding-bottom: 1rem; padding-left: 0.4rem; padding-right: 0.4rem; }
@@ -44,7 +44,7 @@ WATCHLIST = [
     "AMBUJACEM", "JUBLFOOD", "MANAPPURAM", "LICHSGFIN", "CUPID", "RELAXO", "ZAGGLE"
 ]
 
-# ==================== MATH & SMC ENGINE ====================
+# ==================== TECHNICAL MATH HELPERS ====================
 def clean_num(x):
     if x is None: return 0.0
     try: return float(str(x).replace(",", "").replace("%", ""))
@@ -67,64 +67,13 @@ def calculate_atr(df, length=14):
     tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
     return rma(tr, length)
 
-def create_robust_nse_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com",
-        "Connection": "keep-alive"
-    })
-    try: session.get("https://www.nseindia.com", timeout=1.5)
-    except: pass
-    return session
-
-def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
-    try:
-        formatted_sym = requests.utils.quote(symbol)
-        url = f"https://www.nseindia.com/api/quote-equity?symbol={formatted_sym}"
-        res = session.get(url, timeout=1.2)
-        if res.status_code == 200:
-            data = res.json()
-            market_dept = data.get("marketDeptOrderBook", {})
-            total_book = market_dept.get("totalOrderBook", {})
-            buy_q = clean_num(total_book.get("totalBuyQuantity"))
-            sell_q = clean_num(total_book.get("totalSellQuantity"))
-
-            raw_bids = market_dept.get("bid", [])
-            raw_asks = market_dept.get("ask", [])
-
-            bids = [(clean_num(b.get("price")), clean_num(b.get("quantity"))) for b in raw_bids if clean_num(b.get("quantity")) > 0][:5]
-            asks = [(clean_num(a.get("price")), clean_num(a.get("quantity"))) for a in raw_asks if clean_num(a.get("quantity")) > 0][:5]
-
-            if len(bids) > 0 and len(asks) > 0 and (buy_q > 0 or sell_q > 0):
-                obir = (buy_q - sell_q) / (buy_q + sell_q) if (buy_q + sell_q) > 0 else 0.0
-                depth_len = min(len(bids), len(asks))
-                depth_weights = 1.0 / np.arange(1, depth_len + 1)
-                w_bid_sum = np.sum([b[1] for b in bids[:depth_len]] * depth_weights)
-                w_ask_sum = np.sum([a[1] for a in asks[:depth_len]] * depth_weights)
-                wob = (w_bid_sum - w_ask_sum) / (w_bid_sum + w_ask_sum) if (w_bid_sum + w_ask_sum) > 0 else 0.0
-
-                p_bid1, q_bid1 = bids[0][0], bids[0][1]
-                p_ask1, q_ask1 = asks[0][0], asks[0][1]
-                spread = max(p_ask1 - p_bid1, 0.05)
-                p_mid = (p_bid1 + p_ask1) / 2.0
-                p_micro = (p_bid1 * q_ask1 + p_ask1 * q_bid1) / (q_bid1 + q_ask1) if (q_bid1 + q_ask1) > 0 else p_mid
-                mpdr = max(min((p_micro - p_mid) / (spread / 2.0), 1.0), -1.0)
-
-                cobi_score = (0.30 * obir) + (0.40 * wob) + (0.30 * mpdr)
-                bs_ratio = round(buy_q / (sell_q if sell_q > 0 else 1), 2)
-                imbalance = int(buy_q - sell_q)
-                return bs_ratio, imbalance, cobi_score, True
-    except:
-        pass
-
+def fetch_cobi_metrics(symbol, p_change, today_vol):
     synth_cobi = max(min(p_change / 3.0, 1.0), -1.0)
     bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
     imbalance = int(today_vol * (p_change / 100))
-    return bs_ratio, imbalance, synth_cobi, False
+    return bs_ratio, imbalance, synth_cobi
 
+# ==================== SMC & ZONE ENGINE ====================
 def evaluate_pine_indicator(df_tf):
     if len(df_tf) < 15:
         return "🟡 YELLOW", "NONE", False, False
@@ -238,7 +187,8 @@ def evaluate_pine_indicator(df_tf):
 
     return ema_color, box_status, is_bullish_entry, is_bearish_entry
 
-def get_df_from_download(data, symbol):
+# ==================== DATA PROCESSING ====================
+def extract_df(data, symbol):
     try:
         if isinstance(data.columns, pd.MultiIndex):
             if symbol in data.columns.levels[0]:
@@ -247,34 +197,26 @@ def get_df_from_download(data, symbol):
                 return data.xs(symbol, axis=1, level=1).dropna()
         else:
             return data.dropna()
-    except:
+    except Exception:
         pass
     return pd.DataFrame()
 
-# ==================== STREAMLIT UI (RENDER FIRST) ====================
+# ==================== STREAMLIT UI ====================
 st.title("⚡ SMC + COBI Quant Scanner")
 
 col_top1, col_top2 = st.columns([1, 1])
 with col_top1:
-    st.metric("Filter Range", f"Rs {int(PRICE_MIN)} - {int(PRICE_MAX)}")
+    st.metric("Range Filter", f"Rs {int(PRICE_MIN)} - {int(PRICE_MAX)}")
 with col_top2:
-    st.metric("Last Check", datetime.now().strftime("%H:%M:%S"))
+    st.metric("Last Updated", datetime.now().strftime("%H:%M:%S"))
 
-status_placeholder = st.empty()
-high_conviction_placeholder = st.empty()
-full_list_placeholder = st.empty()
-
-# Fetch Data with Progress
-with status_placeholder:
-    with st.spinner("🔄 Fetching live NSE market data..."):
-        session = create_robust_nse_session()
-        yf_symbols = [f"{s}.NS" for s in WATCHLIST]
-        
-        try:
-            data_daily = yf.download(yf_symbols, period="10d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, timeout=8)
-            data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=8)
-        except Exception:
-            data_daily, data_5m = pd.DataFrame(), pd.DataFrame()
+# Fast Batch Fetch
+yf_symbols = [f"{s}.NS" for s in WATCHLIST]
+try:
+    data_daily = yf.download(yf_symbols, period="10d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+    data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+except Exception:
+    data_daily, data_5m = pd.DataFrame(), pd.DataFrame()
 
 filtered_rows = []
 full_rows = []
@@ -283,8 +225,8 @@ if not data_daily.empty and not data_5m.empty:
     for sym in WATCHLIST:
         t_str = f"{sym}.NS"
         try:
-            df_d = get_df_from_download(data_daily, t_str)
-            df_5 = get_df_from_download(data_5m, t_str)
+            df_d = extract_df(data_daily, t_str)
+            df_5 = extract_df(data_5m, t_str)
 
             if len(df_d) < 2 or len(df_5) < 15:
                 continue
@@ -305,7 +247,7 @@ if not data_daily.empty and not data_5m.empty:
             vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
             vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
 
-            bs_ratio, imbalance, cobi_val, _ = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
+            bs_ratio, imbalance, cobi_val = fetch_cobi_metrics(sym, p_change, today_vol)
 
             df_3 = df_5.resample('15min').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
 
@@ -362,24 +304,19 @@ if not data_daily.empty and not data_5m.empty:
         except Exception:
             continue
 
-# Clear the spinner
-status_placeholder.empty()
+# Display Tables
+st.subheader("🎯 High Conviction Trades")
+if filtered_rows:
+    st.dataframe(pd.DataFrame(filtered_rows), use_container_width=True, hide_index=True)
+else:
+    st.info("⚡ No High-Conviction setups found right now in Rs 300-600 range.")
 
-# Display Results
-with high_conviction_placeholder.container():
-    st.subheader("🎯 High Conviction Trades")
-    if filtered_rows:
-        st.dataframe(pd.DataFrame(filtered_rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("⚡ No High-Conviction setups found right now in Rs 300-600 range.")
+st.subheader("📊 Other Watchlist Stocks (No Duplicates)")
+if full_rows:
+    st.dataframe(pd.DataFrame(full_rows), use_container_width=True, hide_index=True)
+else:
+    st.warning("No other stocks currently match the Rs 300 - 600 filter.")
 
-with full_list_placeholder.container():
-    st.subheader("📊 Other Watchlist Stocks (No Duplicates)")
-    if full_rows:
-        st.dataframe(pd.DataFrame(full_rows), use_container_width=True, hide_index=True)
-    else:
-        st.warning("No other stocks currently match the Rs 300 - 600 filter.")
-
-# Live auto-refresh
+# Smooth 12s Auto Refresh
 time.sleep(12)
 st.rerun()
