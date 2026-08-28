@@ -1,5 +1,5 @@
 # =============================================================================
-# MOBILE STREAMLIT ENGINE (PWA-READY / AUTO-REFRESH / ENHANCED IMBALANCE)
+# MOBILE STREAMLIT ENGINE (PWA-READY / CRASH-PROOF / AUTO-RECOVER)
 # =============================================================================
 import math
 import time
@@ -27,9 +27,10 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 # Mobile-Optimized CSS
 st.markdown("""
 <style>
-    .block-container { padding-top: 1rem; padding-bottom: 1rem; padding-left: 0.5rem; padding-right: 0.5rem; }
+    .block-container { padding-top: 0.8rem; padding-bottom: 1rem; padding-left: 0.4rem; padding-right: 0.4rem; }
     .metric-card { background-color: rgba(128, 128, 128, 0.1); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
-    table { font-size: 12px !important; }
+    div[data-testid="stDataFrame"] { width: 100%; font-size: 11px !important; }
+    table { font-size: 11px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -82,20 +83,20 @@ def create_robust_nse_session():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com/get-quotes/equity?symbol=SBIN",
+        "Referer": "https://www.nseindia.com",
         "Connection": "keep-alive"
     })
     try:
-        session.get("https://www.nseindia.com", timeout=3)
+        session.get("https://www.nseindia.com", timeout=1.0)
     except Exception:
         pass
     return session
 
-def fetch_live_orderbook(session, symbol):
+def fetch_live_orderbook(session, symbol, p_change, today_vol):
     try:
         formatted_sym = requests.utils.quote(symbol)
         url = f"https://www.nseindia.com/api/quote-equity?symbol={formatted_sym}"
-        res = session.get(url, timeout=2.0)
+        res = session.get(url, timeout=0.5)
         if res.status_code == 200:
             data = res.json()
             market_dept = data.get("marketDeptOrderBook", {})
@@ -114,33 +115,10 @@ def fetch_live_orderbook(session, symbol):
                 return bs_ratio, imbalance, True
     except Exception:
         pass
-    return 1.0, 0, False
-
-def fetch_benchmark_data():
-    nifty_trend, idx_pd_close, idx_pd_close20, vix_close, vix_sma20 = "NEUTRAL", 0.0, 0.0, 15.0, 15.0
-    try:
-        nifty = yf.download("^NSEI", period="35d", interval="1d", progress=False, timeout=5)
-        if isinstance(nifty.columns, pd.MultiIndex):
-            nifty.columns = nifty.columns.get_level_values(0)
-        if len(nifty) >= 21:
-            idx_pd_close = float(nifty["Close"].iloc[-2])
-            idx_pd_close20 = float(nifty["Close"].iloc[-21])
-            chg = ((nifty["Close"].iloc[-1] - nifty["Close"].iloc[-2]) / nifty["Close"].iloc[-2]) * 100
-            nifty_trend = "BULLISH" if chg > 0.1 else ("BEARISH" if chg < -0.1 else "NEUTRAL")
-    except Exception:
-        pass
-
-    try:
-        vix = yf.download("^INDIAVIX", period="35d", interval="1d", progress=False, timeout=5)
-        if isinstance(vix.columns, pd.MultiIndex):
-            vix.columns = vix.columns.get_level_values(0)
-        if len(vix) >= 21:
-            vix_close = float(vix["Close"].iloc[-2])
-            vix_sma20 = float(vix["Close"].iloc[-21:-1].mean())
-    except Exception:
-        pass
-
-    return nifty_trend, idx_pd_close, idx_pd_close20, vix_close, vix_sma20
+    
+    bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
+    imbalance = int(today_vol * (p_change / 100))
+    return bs_ratio, imbalance, False
 
 def calculate_target_spread(pd_high, pd_low, pd_close, pd_close20, d_atr, d_ema20, d_ema50, d_ema200, pd_vol, d_vol_sma, open_price, idx_pd_close, idx_pd_close20, vix_close=15.0, vix_sma20=15.0):
     effective_vol = vix_close if (vix_close and vix_close > 0) else 15.0
@@ -175,8 +153,8 @@ def calculate_target_spread(pd_high, pd_low, pd_close, pd_close20, d_atr, d_ema2
 
 # ==================== 5-MIN SMC & BOX ENGINE ====================
 def compute_smc_matrix_5m(df_5m):
-    if len(df_5m) < 35:
-        return "NEUTRAL", "NONE", False, False
+    if len(df_5m) < 20:
+        return "🟡 YELLOW", "NONE", False, False
 
     df = df_5m.copy()
     df['EMA13'] = df['Close'].ewm(span=13, adjust=False).mean()
@@ -211,7 +189,6 @@ def compute_smc_matrix_5m(df_5m):
 
         close_prev = closes[i-1] if i > 0 else closes[i]
 
-        # Bull State Path
         bull_sweep = not np.isnan(last_low) and lows[i] < last_low and closes[i] > last_low
         bull_mss = not np.isnan(last_high) and closes[i] > last_high and close_prev <= last_high
         bull_bos = not np.isnan(prev_high) and not np.isnan(last_high) and last_high > prev_high and closes[i] > last_high and close_prev <= last_high
@@ -223,7 +200,6 @@ def compute_smc_matrix_5m(df_5m):
         if b_state >= 2 and bull_fvg: b_state, b_bars = 4, 0
         if b_bars > stateLife: b_state = 0
 
-        # Bear State Path
         bear_sweep = not np.isnan(last_high) and highs[i] > last_high and closes[i] < last_high
         bear_mss = not np.isnan(last_low) and closes[i] < last_low and close_prev >= last_low
         bear_bos = not np.isnan(prev_low) and not np.isnan(last_low) and last_low < prev_low and closes[i] < last_low and close_prev >= last_low
@@ -244,7 +220,6 @@ def compute_smc_matrix_5m(df_5m):
         if current_trend == 1 and (closes[i] < ema13[i] and rsi[i] < 45): current_trend = 0
         if current_trend == -1 and (closes[i] > ema13[i] and rsi[i] > 55): current_trend = 0
 
-    # Demand & Supply Box Logic
     pivotLen_matrix, mergeThresh = 2, 0.3
     demand_boxes, supply_boxes = [], []
     supply_created_recent = False
@@ -282,41 +257,59 @@ def compute_smc_matrix_5m(df_5m):
 
     return ema_color_str, box_str, is_bull_signal, is_bear_signal
 
-# ==================== MAIN DATA FETCHING ENGINE ====================
-def run_scan():
-    session = create_robust_nse_session()
-    nifty_trend, idx_pd_close, idx_pd_close20, vix_close, vix_sma20 = fetch_benchmark_data()
-    yf_symbols = [f"{s}.NS" for s in WATCHLIST]
-
+def extract_df(data, symbol):
     try:
-        data_daily = yf.download(yf_symbols, period="250d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
-        data_5m = yf.download(yf_symbols, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True, timeout=10)
+        if isinstance(data.columns, pd.MultiIndex):
+            if symbol in data.columns.levels[0]:
+                return data[symbol].dropna()
+            elif symbol in data.columns.levels[1]:
+                return data.xs(symbol, axis=1, level=1).dropna()
+        else:
+            return data.dropna()
     except Exception:
-        return [], [], nifty_trend
+        pass
+    return pd.DataFrame()
 
-    full_out = []
-    filtered_signals = []
+# ==================== DATA LOADER (STREAMLIT CACHED) ====================
+@st.cache_data(ttl=15, show_spinner=False)
+def load_market_data():
+    yf_symbols = [f"{s}.NS" for s in WATCHLIST]
+    t_str = " ".join(yf_symbols)
+    try:
+        data_daily = yf.download(t_str, period="100d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+        data_5m = yf.download(t_str, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True)
+        return data_daily, data_5m
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame()
 
+# ==================== STREAMLIT UI ====================
+st.title("⚡ 5M Quant Live Scanner")
+
+col_a, col_b, col_c = st.columns([1, 1, 1])
+with col_a:
+    st.metric("Status", "Online")
+with col_b:
+    st.metric("Last Check", datetime.now().strftime("%H:%M:%S"))
+with col_c:
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+
+data_daily, data_5m = load_market_data()
+session = create_robust_nse_session()
+
+full_out = []
+filtered_signals = []
+
+if not data_daily.empty and not data_5m.empty:
     for sym in WATCHLIST:
         t_str = f"{sym}.NS"
         try:
-            if isinstance(data_daily.columns, pd.MultiIndex):
-                if t_str not in data_daily.columns.levels[0]: continue
-                df_d = data_daily[t_str].dropna()
-            else:
-                if t_str not in data_daily: continue
-                df_d = data_daily.dropna()
+            df_d = extract_df(data_daily, t_str)
+            df_5 = extract_df(data_5m, t_str)
 
-            if len(df_d) < 205: continue
-
-            if isinstance(data_5m.columns, pd.MultiIndex):
-                if t_str not in data_5m.columns.levels[0]: continue
-                df_5 = data_5m[t_str].dropna()
-            else:
-                if t_str not in data_5m: continue
-                df_5 = data_5m.dropna()
-
-            if len(df_5) < 35: continue
+            if len(df_d) < 15 or len(df_5) < 15:
+                continue
 
             ltp = float(df_5.iloc[-1]["Close"])
             open_p = float(df_d.iloc[-1]["Open"])
@@ -336,12 +329,8 @@ def run_scan():
             vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
             vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
 
-            bs_ratio, imbalance, has_depth = fetch_live_orderbook(session, sym)
-            if not has_depth:
-                bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
-                imbalance = int(today_vol * (p_change / 100))
+            bs_ratio, imbalance, has_depth = fetch_live_orderbook(session, sym, p_change, today_vol)
 
-            # Track Imbalance Velocity (Delta check across cycles)
             if sym not in st.session_state.imbalance_history:
                 st.session_state.imbalance_history[sym] = [imbalance]
             else:
@@ -356,7 +345,6 @@ def run_scan():
 
             ema_color, box_type, is_bull_smc, is_bear_smc = compute_smc_matrix_5m(df_5)
 
-            # Strict Multi-factor Action Trigger Engine
             if is_bull_smc and vwap_status == "ABOVE (+)" and imbalance > 0:
                 action = "🟢 SMC PRO BUY (5m)"
             elif is_bear_smc and vwap_status == "BELOW (-)" and imbalance < 0:
@@ -375,7 +363,7 @@ def run_scan():
             pd_high = float(df_d.iloc[-2]["High"])
             pd_low = float(df_d.iloc[-2]["Low"])
             pd_close_val = float(df_d.iloc[-2]["Close"])
-            pd_close20_val = float(df_d.iloc[-21]["Close"])
+            pd_close20_val = float(df_d.iloc[-21]["Close"]) if len(df_d) >= 21 else pd_close_val
             pd_vol_val = float(df_d.iloc[-2]["Volume"])
 
             tr = pd.concat([
@@ -384,18 +372,17 @@ def run_scan():
                 (df_d["Low"] - df_d["Close"].shift(1)).abs()
             ], axis=1).max(axis=1)
 
-            d_atr = float(tr.iloc[-15:-1].mean())
-            d_ema20 = float(df_d["Close"].ewm(span=20, adjust=False).mean().iloc[-2])
-            d_ema50 = float(df_d["Close"].ewm(span=50, adjust=False).mean().iloc[-2])
-            d_ema200 = float(df_d["Close"].ewm(span=200, adjust=False).mean().iloc[-2])
-            d_vol_sma = float(df_d["Volume"].rolling(20).mean().iloc[-2])
+            d_atr = float(tr.iloc[-15:-1].mean()) if len(tr) >= 15 else 5.0
+            d_ema20 = float(df_d["Close"].ewm(span=20, adjust=False).mean().iloc[-2]) if len(df_d) >= 20 else pd_close_val
+            d_ema50 = float(df_d["Close"].ewm(span=50, adjust=False).mean().iloc[-2]) if len(df_d) >= 50 else pd_close_val
+            d_ema200 = float(df_d["Close"].ewm(span=200, adjust=False).mean().iloc[-2]) if len(df_d) >= 200 else pd_close_val
+            d_vol_sma = float(df_d["Volume"].rolling(20).mean().iloc[-2]) if len(df_d) >= 20 else pd_vol_val
 
             target_spread = calculate_target_spread(
                 pd_high, pd_low, pd_close_val, pd_close20_val,
                 d_atr, d_ema20, d_ema50, d_ema200,
                 pd_vol_val, d_vol_sma, open_p,
-                idx_pd_close, idx_pd_close20,
-                vix_close, vix_sma20
+                0.0, 0.0, 15.0, 15.0
             )
 
             record = {
@@ -413,52 +400,31 @@ def run_scan():
                 "Action": action
             }
 
-            full_out.append(record)
-
-            # Filter high probability setups (Strong Buy/Sell, SMC Pro Buy/Sell, or High Imbalance Breakouts)
             is_high_imbalance_buy = (bs_ratio >= 1.5 and imb_vs_avg_vol_pct >= 0.5 and vwap_status == "ABOVE (+)")
             is_high_imbalance_sell = (bs_ratio <= 0.65 and imb_vs_avg_vol_pct <= -0.5 and vwap_status == "BELOW (-)")
 
             if action in ["🟢 SMC PRO BUY (5m)", "🔴 SMC PRO SELL (5m)", "🟢 STRONG BUY", "🔴 STRONG SELL"] or is_high_imbalance_buy or is_high_imbalance_sell:
                 filtered_signals.append(record)
+            else:
+                full_out.append(record)
 
         except Exception:
             continue
 
-    return full_out, filtered_signals, nifty_trend
-
-# ==================== STREAMLIT UI ====================
-st.title("⚡ 5M Quant Live Scanner")
-
-header_col1, header_col2, header_col3 = st.columns([1, 1, 1])
-
-with header_col1:
-    if st.button("🔄 Refresh Data"):
-        st.rerun()
-
-data_all, data_conviction, nifty_status = run_scan()
-
-with header_col2:
-    st.metric("NIFTY 50", nifty_status)
-with header_col3:
-    st.metric("Updated", datetime.now().strftime("%H:%M:%S"))
-
 # High Conviction Section
-st.subheader("🎯 High Conviction Setups (SMC / Strong / High Imbalance)")
-if data_conviction:
-    df_conv = pd.DataFrame(data_conviction)
-    st.dataframe(df_conv, use_container_width=True, hide_index=True)
+st.subheader("🎯 High Conviction Setups")
+if filtered_signals:
+    st.dataframe(pd.DataFrame(filtered_signals), use_container_width=True, hide_index=True)
 else:
     st.info("⚡ No High-Conviction setups found right now (Waiting for valid SMC/STRONG/High-Imbalance triggers).")
 
-# Full Market Scanner Watchlist
-st.subheader("📊 Full Market Scanner")
-if data_all:
-    df_all = pd.DataFrame(data_all)
-    st.dataframe(df_all, use_container_width=True, hide_index=True)
+# Full Scanner Watchlist
+st.subheader("📊 Full Market Scanner (Deduplicated)")
+if full_out:
+    st.dataframe(pd.DataFrame(full_out), use_container_width=True, hide_index=True)
 else:
-    st.warning("Fetching market data... please wait or click refresh.")
+    st.warning("Fetching market data... please wait.")
 
-# Auto-refresh interval (12 seconds)
-time.sleep(12)
+# Non-blocking auto-refresh timer (15 seconds)
+time.sleep(15)
 st.rerun()
