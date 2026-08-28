@@ -1,5 +1,5 @@
 # =============================================================================
-# MOBILE STREAMLIT ENGINE (PWA-READY FOR ANDROID/IOS BROWSER)
+# MOBILE STREAMLIT ENGINE (PWA-READY / AUTO-REFRESH / ENHANCED IMBALANCE)
 # =============================================================================
 import math
 import time
@@ -24,14 +24,11 @@ warnings.filterwarnings("ignore")
 import logging
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# Mobile Optimized CSS
+# Mobile-Optimized CSS
 st.markdown("""
 <style>
     .block-container { padding-top: 1rem; padding-bottom: 1rem; padding-left: 0.5rem; padding-right: 0.5rem; }
     .metric-card { background-color: rgba(128, 128, 128, 0.1); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; }
-    .badge-buy { background-color: #2e7d32; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; }
-    .badge-sell { background-color: #c62828; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; }
-    .badge-neutral { background-color: #616161; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; font-size: 11px; }
     table { font-size: 12px !important; }
 </style>
 """, unsafe_allow_html=True)
@@ -48,6 +45,10 @@ WATCHLIST = [
 PRICE_FILTER_ACTIVE = False
 PRICE_MIN, PRICE_MAX = 300, 500
 VWAP_BUFFER_PCT = 0.15
+
+# Global tracker for Imbalance Velocity in Streamlit Session
+if "imbalance_history" not in st.session_state:
+    st.session_state.imbalance_history = {}
 
 # ==================== TECHNICAL MATH HELPERS ====================
 def clean_num(x):
@@ -281,7 +282,7 @@ def compute_smc_matrix_5m(df_5m):
 
     return ema_color_str, box_str, is_bull_signal, is_bear_signal
 
-# ==================== MAIN DATA FETCHING ====================
+# ==================== MAIN DATA FETCHING ENGINE ====================
 def run_scan():
     session = create_robust_nse_session()
     nifty_trend, idx_pd_close, idx_pd_close20, vix_close, vix_sma20 = fetch_benchmark_data()
@@ -295,13 +296,6 @@ def run_scan():
 
     full_out = []
     filtered_signals = []
-
-    HIGH_PROBABILITY_ACTIONS = [
-        "🟢 SMC PRO BUY (5m)",
-        "🔴 SMC PRO SELL (5m)",
-        "🟢 STRONG BUY",
-        "🔴 STRONG SELL"
-    ]
 
     for sym in WATCHLIST:
         t_str = f"{sym}.NS"
@@ -347,21 +341,33 @@ def run_scan():
                 bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
                 imbalance = int(today_vol * (p_change / 100))
 
+            # Track Imbalance Velocity (Delta check across cycles)
+            if sym not in st.session_state.imbalance_history:
+                st.session_state.imbalance_history[sym] = [imbalance]
+            else:
+                st.session_state.imbalance_history[sym].append(imbalance)
+                if len(st.session_state.imbalance_history[sym]) > 4:
+                    st.session_state.imbalance_history[sym].pop(0)
+
+            imb_trend_positive = len(st.session_state.imbalance_history[sym]) >= 2 and (st.session_state.imbalance_history[sym][-1] >= st.session_state.imbalance_history[sym][-2])
+            imb_trend_negative = len(st.session_state.imbalance_history[sym]) >= 2 and (st.session_state.imbalance_history[sym][-1] <= st.session_state.imbalance_history[sym][-2])
+
             imb_vs_avg_vol_pct = ((imbalance / avg_vol_1w) * 100) if avg_vol_1w > 0 else 0.0
 
             ema_color, box_type, is_bull_smc, is_bear_smc = compute_smc_matrix_5m(df_5)
 
-            if is_bull_smc:
+            # Strict Multi-factor Action Trigger Engine
+            if is_bull_smc and vwap_status == "ABOVE (+)" and imbalance > 0:
                 action = "🟢 SMC PRO BUY (5m)"
-            elif is_bear_smc:
+            elif is_bear_smc and vwap_status == "BELOW (-)" and imbalance < 0:
                 action = "🔴 SMC PRO SELL (5m)"
-            elif p_change > 0.5 and vol_chg_pct > 10 and bs_ratio >= 1.3 and imb_vs_avg_vol_pct > 1.0 and vwap_status == "ABOVE (+)":
+            elif p_change > 0.4 and bs_ratio >= 1.4 and imb_vs_avg_vol_pct > 0.4 and vwap_status == "ABOVE (+)" and imb_trend_positive:
                 action = "🟢 STRONG BUY"
-            elif p_change < -0.5 and vol_chg_pct > 10 and bs_ratio <= 0.7 and imb_vs_avg_vol_pct < -1.0 and vwap_status == "BELOW (-)":
+            elif p_change < -0.4 and bs_ratio <= 0.75 and imb_vs_avg_vol_pct < -0.4 and vwap_status == "BELOW (-)" and imb_trend_negative:
                 action = "🔴 STRONG SELL"
-            elif bs_ratio > 2.0 and vwap_status == "ABOVE (+)":
+            elif bs_ratio > 1.75 and vwap_status == "ABOVE (+)" and imbalance > 0:
                 action = "🟢 ACCUMULATION"
-            elif bs_ratio < 0.5 and vwap_status == "BELOW (-)":
+            elif bs_ratio < 0.60 and vwap_status == "BELOW (-)" and imbalance < 0:
                 action = "🔴 DISTRIBUTION"
             else:
                 action = "🟡 SIDEWAYS"
@@ -409,7 +415,11 @@ def run_scan():
 
             full_out.append(record)
 
-            if action in HIGH_PROBABILITY_ACTIONS:
+            # Filter high probability setups (Strong Buy/Sell, SMC Pro Buy/Sell, or High Imbalance Breakouts)
+            is_high_imbalance_buy = (bs_ratio >= 1.5 and imb_vs_avg_vol_pct >= 0.5 and vwap_status == "ABOVE (+)")
+            is_high_imbalance_sell = (bs_ratio <= 0.65 and imb_vs_avg_vol_pct <= -0.5 and vwap_status == "BELOW (-)")
+
+            if action in ["🟢 SMC PRO BUY (5m)", "🔴 SMC PRO SELL (5m)", "🟢 STRONG BUY", "🔴 STRONG SELL"] or is_high_imbalance_buy or is_high_imbalance_sell:
                 filtered_signals.append(record)
 
         except Exception:
@@ -420,11 +430,7 @@ def run_scan():
 # ==================== STREAMLIT UI ====================
 st.title("⚡ 5M Quant Live Scanner")
 
-# Header status
 header_col1, header_col2, header_col3 = st.columns([1, 1, 1])
-
-if "auto_refresh" not in st.session_state:
-    st.session_state.auto_refresh = True
 
 with header_col1:
     if st.button("🔄 Refresh Data"):
@@ -438,14 +444,14 @@ with header_col3:
     st.metric("Updated", datetime.now().strftime("%H:%M:%S"))
 
 # High Conviction Section
-st.subheader("🎯 High Conviction Setups")
+st.subheader("🎯 High Conviction Setups (SMC / Strong / High Imbalance)")
 if data_conviction:
     df_conv = pd.DataFrame(data_conviction)
     st.dataframe(df_conv, use_container_width=True, hide_index=True)
 else:
-    st.info("⚡ No High-Conviction setups found right now (Waiting for SMC PRO or STRONG triggers).")
+    st.info("⚡ No High-Conviction setups found right now (Waiting for valid SMC/STRONG/High-Imbalance triggers).")
 
-# Full Scanner Watchlist
+# Full Market Scanner Watchlist
 st.subheader("📊 Full Market Scanner")
 if data_all:
     df_all = pd.DataFrame(data_all)
@@ -453,6 +459,6 @@ if data_all:
 else:
     st.warning("Fetching market data... please wait or click refresh.")
 
-# Auto-refresh loop for live mode (12 seconds)
+# Auto-refresh interval (12 seconds)
 time.sleep(12)
 st.rerun()
