@@ -9,42 +9,27 @@ import warnings
 import numpy as np
 import pandas as pd
 import streamlit as st
+from tabulate import tabulate
 import yfinance as yf
 
-# Suppress background logs & warnings
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# -----------------------------------------------------------------------------
-# STREAMLIT PAGE CONFIGURATION (MOBILE RESPONSIVE LAYOUT)
-# -----------------------------------------------------------------------------
+# Streamlit Mobile Page Setup
 st.set_page_config(
     page_title="SMC Quantitative Scanner",
-    page_icon="📈",
+    page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed",
 )
 
-# Custom Mobile-Optimized CSS
 st.markdown(
     """
     <style>
     .block-container {
         padding-top: 1rem;
         padding-bottom: 2rem;
-        padding-left: 0.75rem;
-        padding-right: 0.75rem;
-    }
-    h1, h2, h3 {
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    }
-    .metric-card {
-        background-color: #1E222D;
-        border: 1px solid #2A2E39;
-        border-radius: 8px;
-        padding: 12px;
-        margin-bottom: 10px;
-        color: #FFFFFF;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
     }
     .stDataFrame {
         width: 100% !important;
@@ -53,7 +38,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
 
 # =====================================================================
 # 1. CORE MATHEMATICAL & TECHNICAL INDICATORS
@@ -229,7 +213,7 @@ def process_smc_matrix(
             current_trend = 1
         elif bear_confirm:
             current_trend = -1
-
+        
         # State Invalidation
         if current_trend == 1 and (closes[i] < ema13[i] and rsi[i] < 45):
             current_trend = 0
@@ -472,7 +456,6 @@ def load_intraday_data(symbol: str):
         return pd.DataFrame(), pd.DataFrame()
 
 
-@st.cache_data(ttl=3600)
 def get_expanded_symbols():
     fallback = [
         "VTL.NS", "ARVIND.NS", "ITC.NS", "VEDL.NS", "COALINDIA.NS", "NTPC.NS", "TATAPOWER.NS",
@@ -603,46 +586,20 @@ def evaluate_symbol(symbol: str):
 
 
 # =====================================================================
-# 6. STREAMLIT MOBILE APP UI & EXECUTION
+# 6. RUN EXECUTION ENGINE
 # =====================================================================
-def main():
+def run_screener():
+    table1_rows, table2_rows = [], []
+    symbols = get_expanded_symbols()
+    
     st.markdown("### 📊 SMC & Trinity Quantitative Screener")
     st.caption("Live 3M/5M SMC Matrix Engine • Filter Range: ₹300 - ₹600")
 
-    symbols = get_expanded_symbols()
+    progress_bar = st.progress(0, text="Initializing Market Scanner...")
+    total = len(symbols)
 
-    # Sidebar Controls
-    with st.sidebar:
-        st.header("⚙️ Controls")
-        st.write(f"**Loaded Universe:** {len(symbols)} Stocks")
-        scan_mode = st.radio(
-            "Scan Mode",
-            ["High Priority Watchlist (Fast)", "Full Market Universe (Deep Scan)"],
-            index=0,
-        )
-        refresh_btn = st.button("🔄 Scan Market Now", use_container_width=True)
-
-    if scan_mode == "High Priority Watchlist (Fast)":
-        active_symbols = [
-            "VTL.NS", "ARVIND.NS", "ITC.NS", "VEDL.NS", "COALINDIA.NS", "NTPC.NS", "TATAPOWER.NS",
-            "BPCL.NS", "HINDPETRO.NS", "WIPRO.NS", "DABUR.NS", "BEL.NS",
-            "APOLLOTYRE.NS", "AMBUJACEM.NS", "EXIDEIND.NS", "BHEL.NS",
-            "NATIONALUM.NS", "GNFC.NS", "CHAMBLFERT.NS", "UPL.NS",
-            "AARTIIND.NS", "M&MFIN.NS", "LICHSGFIN.NS", "MANAPPURAM.NS",
-            "ABCAPITAL.NS", "BIOCON.NS", "PRECWIRE.NS",
-        ]
-    else:
-        active_symbols = symbols
-
-    progress_bar = st.progress(0, text="Ready to scan...")
-    status_text = st.empty()
-
-    table1_rows, table2_rows = [], []
-    total_count = len(active_symbols)
-
-    for idx, sym in enumerate(active_symbols):
-        progress_val = (idx + 1) / total_count
-        progress_bar.progress(progress_val, text=f"Analyzing {sym} ({idx+1}/{total_count})...")
+    for idx, sym in enumerate(symbols):
+        progress_bar.progress((idx + 1) / total, text=f"Scanning {sym} ({idx+1}/{total})...")
         res = evaluate_symbol(sym)
         if res is not None:
             t_type, row_data = res
@@ -652,49 +609,31 @@ def main():
                 table1_rows.append(row_data)
 
     progress_bar.empty()
-    status_text.empty()
 
     if table1_rows:
         table1_rows.sort(key=lambda x: x["Symbol"])
     if table2_rows:
         table2_rows.sort(key=lambda x: x["Symbol"])
 
-    # Metrics Summary Row
-    col_m1, col_m2, col_m3 = st.columns(3)
-    col_m1.metric("Total Scanned", f"{total_count}")
-    col_m2.metric("Table 1 Signals", f"{len(table1_rows)}")
-    col_m3.metric("Table 2 Trinity", f"{len(table2_rows)}")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Scanned", f"{total}")
+    col2.metric("Table 1 Signals", f"{len(table1_rows)}")
+    col3.metric("Table 2 Trinity", f"{len(table2_rows)}")
 
-    # -------------------------------------------------------------
-    # TABLE 2 DISPLAY (INSTITUTIONAL ALIGNED TRADES)
-    # -------------------------------------------------------------
     st.markdown("#### 💎 TABLE 2: 100% PERFECT TRINITY ALIGNED TRADES")
     if table2_rows:
-        df_t2 = pd.DataFrame(table2_rows)
-        st.dataframe(
-            df_t2,
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(pd.DataFrame(table2_rows), use_container_width=True, hide_index=True)
     else:
         st.info("⚠️ No strictly aligned trades available for Table 2 right now.")
 
     st.markdown("---")
 
-    # -------------------------------------------------------------
-    # TABLE 1 DISPLAY (QUANTITATIVE WATCHLIST & GRADE-A)
-    # -------------------------------------------------------------
     st.markdown("#### 📋 TABLE 1: QUANTITATIVE WATCHLIST & GRADE-A TRADES")
     if table1_rows:
-        df_t1 = pd.DataFrame(table1_rows)
-        st.dataframe(
-            df_t1,
-            use_container_width=True,
-            hide_index=True,
-        )
+        st.dataframe(pd.DataFrame(table1_rows), use_container_width=True, hide_index=True)
     else:
-        st.warning("No stocks matched Table 1 criteria in the current price range (₹300 - ₹600).")
+        st.warning("No stocks matched Table 1 criteria.")
 
 
 if __name__ == "__main__":
-    main()
+    run_screener()
