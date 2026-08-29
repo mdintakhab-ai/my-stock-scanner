@@ -17,7 +17,7 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 # Streamlit Page Configuration for Mobile / Responsive UI
 st.set_page_config(
-    page_title="Institutional Trinity Screener",
+    page_title="Falcon Trinity Screener",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -305,6 +305,92 @@ def process_smc_matrix(
 # =====================================================================
 # 3. PRE-MARKET & LIVE COBI SCORING ENGINE
 # =====================================================================
+def calculate_pms(
+    pre_market_volume: float,
+    avg_pre_market_volume_10d: float,
+    total_buy_qty: float,
+    total_sell_qty: float,
+    pre_open_price: float,
+    yesterday_close: float,
+    atr_10d: float,
+    stock_pre_open_gap_pct: float = 0.0,
+    nifty_pre_open_gap_pct: float = 0.0,
+    max_call_oi_strike: float = 0.0,
+) -> float:
+    w1, w2, w3, w4, w5 = 0.30, 0.25, 0.20, 0.15, 0.10
+
+    vol_ratio = ((pre_market_volume / avg_pre_market_volume_10d) - 1.0) if avg_pre_market_volume_10d > 0 else 0.0
+    V_n = clamp(vol_ratio, -1.0, 1.0)
+
+    total_depth = total_buy_qty + total_sell_qty
+    D_n = ((total_buy_qty - total_sell_qty) / total_depth) if total_depth > 0 else 0.0
+
+    gap_points = pre_open_price - yesterday_close
+    G_n = clamp(gap_points / atr_10d, -1.0, 1.0) if atr_10d > 0 else 0.0
+
+    rs_ratio = (
+        (stock_pre_open_gap_pct / nifty_pre_open_gap_pct) - 1.0
+        if nifty_pre_open_gap_pct != 0
+        else stock_pre_open_gap_pct
+    )
+    RS_n = clamp(rs_ratio, -1.0, 1.0)
+
+    strike_distance_atr = (
+        (abs(pre_open_price - max_call_oi_strike) / atr_10d)
+        if (atr_10d > 0 and max_call_oi_strike > 0)
+        else 0.0
+    )
+    OI_n = clamp(1.0 - strike_distance_atr, 0.0, 1.0) if max_call_oi_strike > 0 else 0.0
+
+    pms_score = (w1 * V_n) + (w2 * D_n) + (w3 * G_n) + (w4 * RS_n) - (w5 * OI_n)
+    return round(pms_score, 4)
+
+
+def calculate_cobi(
+    bids: list,
+    asks: list,
+    total_bid_qty: float = None,
+    total_ask_qty: float = None,
+    weights=(0.3, 0.4, 0.3),
+) -> float:
+    w1, w2, w3 = weights
+
+    bid_prices = np.array([b[0] for b in bids], dtype=float) if bids else np.array([])
+    bid_qtys = np.array([b[1] for b in bids], dtype=float) if bids else np.array([])
+    ask_prices = np.array([a[0] for a in asks], dtype=float) if asks else np.array([])
+    ask_qtys = np.array([a[1] for a in asks], dtype=float) if asks else np.array([])
+
+    tot_b = total_bid_qty if total_bid_qty is not None else np.sum(bid_qtys)
+    tot_a = total_ask_qty if total_ask_qty is not None else np.sum(ask_qtys)
+    obir = (tot_b - tot_a) / (tot_b + tot_a) if (tot_b + tot_a) > 0 else 0.0
+
+    depth = min(len(bid_qtys), len(ask_qtys))
+    if depth > 0:
+        depth_weights = 1.0 / np.arange(1, depth + 1)
+        w_bid_sum = np.sum(bid_qtys[:depth] * depth_weights)
+        w_ask_sum = np.sum(ask_qtys[:depth] * depth_weights)
+        wob = (w_bid_sum - w_ask_sum) / (w_bid_sum + w_ask_sum) if (w_bid_sum + w_ask_sum) > 0 else 0.0
+    else:
+        wob = 0.0
+
+    if len(bid_prices) > 0 and len(ask_prices) > 0:
+        p_bid1, q_bid1 = bid_prices[0], bid_qtys[0]
+        p_ask1, q_ask1 = ask_prices[0], ask_qtys[0]
+        spread = p_ask1 - p_bid1
+        p_mid = (p_bid1 + p_ask1) / 2.0
+
+        if (q_bid1 + q_ask1) > 0 and spread > 0:
+            p_micro = (p_bid1 * q_ask1 + p_ask1 * q_bid1) / (q_bid1 + q_ask1)
+            mpdr = (p_micro - p_mid) / (spread / 2.0)
+        else:
+            mpdr = 0.0
+    else:
+        mpdr = 0.0
+
+    cobi_score = (w1 * obir) + (w2 * wob) + (w3 * mpdr)
+    return round(clamp(cobi_score, -1.0, 1.0), 4)
+
+
 def compute_live_candle_scores(df: pd.DataFrame):
     if len(df) < 11:
         return 0.0, 0.0
