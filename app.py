@@ -1,391 +1,589 @@
-# =============================================================================
-# ADVANCED SMC + COBI MICROSTRUCTURE LIVE QUANT ENGINE (MOBILE APP)
-# =============================================================================
-import math
-import time
-import warnings
-from datetime import datetime
-import pandas as pd
-import numpy as np
-import requests
-import yfinance as yf
-import streamlit as st
-
-st.set_page_config(
-    page_title="SMC + COBI Scanner",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
-
-warnings.filterwarnings("ignore")
+import io
 import logging
+import os
+import sys
+import time
+import urllib.request
+import warnings
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+import yfinance as yf
+
+# Suppress logs and warnings
+warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-st.markdown("""
-<style>
-    .block-container { padding-top: 0.8rem; padding-bottom: 1rem; padding-left: 0.4rem; padding-right: 0.4rem; }
-    div[data-testid="stDataFrame"] { width: 100%; font-size: 11px !important; }
-    table { font-size: 11px !important; }
-    .stMetric { background-color: rgba(128, 128, 128, 0.08); padding: 6px 10px; border-radius: 6px; }
-</style>
-""", unsafe_allow_html=True)
+# Streamlit Page Configuration for Mobile / Responsive UI
+st.set_page_config(
+    page_title="Institutional Trinity Screener",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
-PRICE_MIN = 300.0
-PRICE_MAX = 600.0
-VWAP_BUFFER_PCT = 0.15
+# Custom Mobile-Optimized CSS
+st.markdown(
+    """
+    <style>
+    .main .block-container {
+        padding-top: 1rem;
+        padding-bottom: 2rem;
+        padding-left: 0.8rem;
+        padding-right: 0.8rem;
+    }
+    .metric-card {
+        background-color: #1e222d;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 10px;
+        border: 1px solid #2a2e39;
+    }
+    .stDataFrame {
+        width: 100%;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-WATCHLIST = [
-    "PRECWIRE", "TATAPOWER", "BHEL", "NATIONALUM", "EXIDEIND", "PFC", "RECLTD", "SAIL",
-    "NMDC", "GMRP&UI", "HINDCOPPER", "DELHIVERY", "REDINGTON", "HSCL", "PAYTM",
-    "CHENNPETRO", "ASTERDM", "IDFCFIRSTB", "FEDERALBNK", "IOC", "ONGC", "GAIL",
-    "CANBK", "UNIONBANK", "BANKBARODA", "ASHOKLEY", "BIOCON", "BANDHANBNK",
-    "AMBUJACEM", "JUBLFOOD", "MANAPPURAM", "LICHSGFIN", "CUPID", "RELAXO", "ZAGGLE"
-]
+# =====================================================================
+# 1. CORE MATHEMATICAL & TECHNICAL INDICATORS
+# =====================================================================
+def clamp(value: float, min_val: float = -1.0, max_val: float = 1.0) -> float:
+    if np.isnan(value):
+        return 0.0
+    return max(min_val, min(float(value), max_val))
 
-def clean_num(x):
-    if x is None: return 0.0
-    try: return float(str(x).replace(",", "").replace("%", ""))
-    except (ValueError, TypeError): return 0.0
 
-def rma(series, length):
-    return series.ewm(alpha=1/length, min_periods=length, adjust=False).mean()
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high_low = df["High"] - df["Low"]
+    high_close = (df["High"] - df["Close"].shift(1)).abs()
+    low_close = (df["Low"] - df["Close"].shift(1)).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
 
-def calculate_rsi(series, length=14):
+
+def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     delta = series.diff()
-    gain = np.where(delta > 0, delta, 0.0)
-    loss = np.where(delta < 0, -delta, 0.0)
-    avg_gain = rma(pd.Series(gain, index=series.index), length)
-    avg_loss = rma(pd.Series(loss, index=series.index), length)
-    rs = avg_gain / (avg_loss + 1e-10)
-    return 100 - (100 / (1 + rs))
+    gain = delta.clip(lower=0.0)
+    loss = -delta.clip(upper=0.0)
+    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / (avg_loss + 1e-9)
+    return (100.0 - (100.0 / (1.0 + rs))).fillna(50.0)
 
-def calculate_atr(df, length=14):
-    high, low, close = df['High'], df['Low'], df['Close']
-    tr = pd.concat([high - low, (high - close.shift(1)).abs(), (low - close.shift(1)).abs()], axis=1).max(axis=1)
-    return rma(tr, length)
 
-def create_robust_nse_session():
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.nseindia.com",
-        "Connection": "keep-alive"
-    })
-    try: session.get("https://www.nseindia.com", timeout=0.8)
-    except: pass
-    return session
-
-def fetch_live_orderbook_cobi(session, symbol, p_change, today_vol):
-    try:
-        formatted_sym = requests.utils.quote(symbol)
-        url = f"https://www.nseindia.com/api/quote-equity?symbol={formatted_sym}"
-        res = session.get(url, timeout=0.6)
-        if res.status_code == 200:
-            data = res.json()
-            market_dept = data.get("marketDeptOrderBook", {})
-            total_book = market_dept.get("totalOrderBook", {})
-            buy_q = clean_num(total_book.get("totalBuyQuantity"))
-            sell_q = clean_num(total_book.get("totalSellQuantity"))
-
-            raw_bids = market_dept.get("bid", [])
-            raw_asks = market_dept.get("ask", [])
-
-            bids = [(clean_num(b.get("price")), clean_num(b.get("quantity"))) for b in raw_bids if clean_num(b.get("quantity")) > 0][:5]
-            asks = [(clean_num(a.get("price")), clean_num(a.get("quantity"))) for a in raw_asks if clean_num(a.get("quantity")) > 0][:5]
-
-            if len(bids) > 0 and len(asks) > 0 and (buy_q > 0 or sell_q > 0):
-                obir = (buy_q - sell_q) / (buy_q + sell_q) if (buy_q + sell_q) > 0 else 0.0
-                depth_len = min(len(bids), len(asks))
-                depth_weights = 1.0 / np.arange(1, depth_len + 1)
-                w_bid_sum = np.sum([b[1] for b in bids[:depth_len]] * depth_weights)
-                w_ask_sum = np.sum([a[1] for a in asks[:depth_len]] * depth_weights)
-                wob = (w_bid_sum - w_ask_sum) / (w_bid_sum + w_ask_sum) if (w_bid_sum + w_ask_sum) > 0 else 0.0
-
-                p_bid1, q_bid1 = bids[0][0], bids[0][1]
-                p_ask1, q_ask1 = asks[0][0], asks[0][1]
-                spread = max(p_ask1 - p_bid1, 0.05)
-                p_mid = (p_bid1 + p_ask1) / 2.0
-                p_micro = (p_bid1 * q_ask1 + p_ask1 * q_bid1) / (q_bid1 + q_ask1) if (q_bid1 + q_ask1) > 0 else p_mid
-                mpdr = max(min((p_micro - p_mid) / (spread / 2.0), 1.0), -1.0)
-
-                cobi_score = (0.30 * obir) + (0.40 * wob) + (0.30 * mpdr)
-                bs_ratio = round(buy_q / (sell_q if sell_q > 0 else 1), 2)
-                imbalance = int(buy_q - sell_q)
-                return bs_ratio, imbalance, cobi_score, True
-    except:
-        pass
-
-    synth_cobi = max(min(p_change / 3.0, 1.0), -1.0)
-    bs_ratio = round(max(0.2, min(5.0, 1.0 + (p_change * 0.35))), 2)
-    imbalance = int(today_vol * (p_change / 100))
-    return bs_ratio, imbalance, synth_cobi, False
-
-def evaluate_pine_indicator(df_tf):
-    if len(df_tf) < 15:
-        return "🟡 YELLOW", "NONE", False, False
-
-    df = df_tf.copy()
-    df['EMA13'] = df['Close'].ewm(span=13, adjust=False).mean()
-    df['EMA13_Up'] = df['EMA13'] > df['EMA13'].shift(1)
-    df['EMA13_Dn'] = df['EMA13'] < df['EMA13'].shift(1)
-    df['RSI14'] = calculate_rsi(df['Close'], 14)
-    df['ATR14'] = calculate_atr(df, 14)
-    df['Vol_SMA14'] = df['Volume'].rolling(14).mean()
-
-    n = len(df)
-    highs, lows, closes, opens = df['High'].values, df['Low'].values, df['Close'].values, df['Open'].values
-    atr, rsi, ema13 = df['ATR14'].values, df['RSI14'].values, df['EMA13'].values
-    ema_up, ema_dn = df['EMA13_Up'].values, df['EMA13_Dn'].values
-
-    p_smc, fvgMinAtr, stateLife = 5, 0.1, 30
-    bullState, bullBars = 0, 0
-    bearState, bearBars = 0, 0
-    trendSMC = 0
-    lastHigh, lastLow, prevHigh_smc, prevLow_smc = np.nan, np.nan, np.nan, np.nan
-
-    p_mat = 2
-    mergeThresh = 0.3
-    maxTests = 4
-
-    s_Boxes = []
-    d_Boxes = []
-
-    for i in range(n):
-        bullBars += 1
-        bearBars += 1
-
-        if i >= 2 * p_smc:
-            p = i - p_smc
-            if all(highs[p] > highs[p-k] for k in range(1, p_smc + 1)) and all(highs[p] > highs[p+k] for k in range(1, p_smc + 1)):
-                prevHigh_smc = lastHigh
-                lastHigh = highs[p]
-            if all(lows[p] < lows[p-k] for k in range(1, p_smc + 1)) and all(lows[p] < lows[p+k] for k in range(1, p_smc + 1)):
-                prevLow_smc = lastLow
-                lastLow = lows[p]
-
-        cp = closes[i-1] if i > 0 else closes[i]
-
-        bullSweep = not np.isnan(lastLow) and lows[i] < lastLow and closes[i] > lastLow
-        bullMSS = not np.isnan(lastHigh) and closes[i] > lastHigh and cp <= lastHigh
-        bullBOS = not np.isnan(prevHigh_smc) and not np.isnan(lastHigh) and lastHigh > prevHigh_smc and closes[i] > lastHigh and cp <= lastHigh
-        bullFVG = i >= 2 and lows[i] > highs[i-2] and (lows[i] - highs[i-2]) > (atr[i] * fvgMinAtr)
-
-        if bullSweep: bullState, bullBars = 1, 0
-        if bullState >= 1 and bullMSS: bullState, bullBars = 2, 0
-        if bullState >= 2 and bullBOS: bullState, bullBars = 3, 0
-        if bullState >= 2 and bullFVG: bullState, bullBars = 4, 0
-        if bullBars > stateLife: bullState = 0
-
-        bearSweep = not np.isnan(lastHigh) and highs[i] > lastHigh and closes[i] < lastHigh
-        bearMSS = not np.isnan(lastLow) and closes[i] < lastLow and cp >= lastLow
-        bearBOS = not np.isnan(prevLow_smc) and not np.isnan(lastLow) and lastLow < prevLow_smc and closes[i] < lastLow and cp >= lastLow
-        bearFVG = i >= 2 and highs[i] < lows[i-2] and (lows[i-2] - highs[i]) > (atr[i] * fvgMinAtr)
-
-        if bearSweep: bearState, bearBars = 1, 0
-        if bearState >= 1 and bearMSS: bearState, bearBars = 2, 0
-        if bearState >= 2 and bearBOS: bearState, bearBars = 3, 0
-        if bearState >= 2 and bearFVG: bearState, bearBars = 4, 0
-        if bearBars > stateLife: bearState = 0
-
-        if (bullState == 4 or (closes[i] > ema13[i] and ema_up[i])) and rsi[i] > 50:
-            trendSMC = 1
-        elif (bearState == 4 or (closes[i] < ema13[i] and ema_dn[i])) and rsi[i] < 50:
-            trendSMC = -1
-
-        if trendSMC == 1 and (closes[i] < ema13[i] and rsi[i] < 45): trendSMC = 0
-        if trendSMC == -1 and (closes[i] > ema13[i] and rsi[i] > 55): trendSMC = 0
-
-        if i >= 2 * p_mat:
-            pm = i - p_mat
-            if all(highs[pm] > highs[pm-k] for k in range(1, p_mat + 1)) and all(highs[pm] > highs[pm+k] for k in range(1, p_mat + 1)):
-                topLvl = highs[pm]
-                botLvl = max(opens[pm], closes[pm])
-                isDup = any(b['active'] and abs(b['top'] - topLvl) < (atr[i] * mergeThresh) for b in s_Boxes)
-                if not isDup:
-                    s_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
-
-            if all(lows[pm] < lows[pm-k] for k in range(1, p_mat + 1)) and all(lows[pm] < lows[pm+k] for k in range(1, p_mat + 1)):
-                topLvl = min(opens[pm], closes[pm])
-                botLvl = lows[pm]
-                isDup = any(b['active'] and abs(b['bot'] - botLvl) < (atr[i] * mergeThresh) for b in d_Boxes)
-                if not isDup:
-                    d_Boxes.append({'top': topLvl, 'bot': botLvl, 'active': True, 'tests': 0, 'created_bar': i})
-
-        for b in s_Boxes:
-            if b['active']:
-                if highs[i] > b['bot'] and (i > 0 and highs[i-1] <= b['bot']):
-                    b['tests'] += 1
-                if highs[i] > b['top'] or b['tests'] >= maxTests:
-                    b['active'] = False
-
-        for b in d_Boxes:
-            if b['active']:
-                if lows[i] < b['top'] and (i > 0 and lows[i-1] >= b['top']):
-                    b['tests'] += 1
-                if lows[i] < b['bot'] or b['tests'] >= maxTests:
-                    b['active'] = False
-
-    recent_supply = any(b['active'] and (n - 1 - b['created_bar'] <= 3) for b in s_Boxes)
-    recent_demand = any(b['active'] and (n - 1 - b['created_bar'] <= 3) for b in d_Boxes)
-
-    box_status = "NONE"
-    if recent_supply: box_status = "SUPPLY"
-    elif recent_demand: box_status = "DEMAND"
-
-    if trendSMC == 1 or (closes[-1] > ema13[-1] and ema_up[-1]):
-        ema_color = "🟢 GREEN"
-    elif trendSMC == -1 or (closes[-1] < ema13[-1] and ema_dn[-1]):
-        ema_color = "🔴 RED"
+def calculate_intraday_vwap(df: pd.DataFrame) -> pd.Series:
+    df_temp = df.copy()
+    if df_temp.index.tz is None:
+        df_temp.index = df_temp.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
     else:
-        ema_color = "🟡 YELLOW"
+        df_temp.index = df_temp.index.tz_convert("Asia/Kolkata")
 
-    is_bullish_entry = (ema_color == "🟢 GREEN") and (box_status == "DEMAND")
-    is_bearish_entry = (ema_color == "🔴 RED") and (box_status == "SUPPLY")
+    df_temp["Session_Date"] = df_temp.index.date
+    typical_price = (df_temp["High"] + df_temp["Low"] + df_temp["Close"]) / 3.0
+    df_temp["TP_Vol"] = typical_price * df_temp["Volume"]
 
-    return ema_color, box_status, is_bullish_entry, is_bearish_entry
+    cum_tp_vol = df_temp.groupby("Session_Date")["TP_Vol"].cumsum()
+    cum_vol = df_temp.groupby("Session_Date")["Volume"].cumsum()
+    return (cum_tp_vol / (cum_vol + 1e-9)).fillna(df_temp["Close"])
 
-def extract_df(data, symbol):
+
+# =====================================================================
+# 2. EXACT PINE SCRIPT SMC STATE MACHINE & MATRIX ENGINE
+# =====================================================================
+def process_smc_matrix(
+    df: pd.DataFrame,
+    pivot_matrix: int = 2,
+    pivot_smc: int = 5,
+    state_life: int = 30,
+    fvg_min_atr: float = 0.1,
+    merge_thresh: float = 0.3,
+    max_tests: int = 4,
+    require_fvg: bool = False,
+) -> pd.DataFrame:
+    df = df.copy()
+    n = len(df)
+    if n < max(pivot_smc * 2 + 5, 20):
+        return df
+
+    # Ribbon EMAs & Quant Baselines (8, 13, 21)
+    df["EMA8"] = df["Close"].ewm(span=8, adjust=False).mean()
+    df["EMA13"] = df["Close"].ewm(span=13, adjust=False).mean()
+    df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
+    df["ATR"] = calculate_atr(df, 14).bfill().ffill()
+    df["RSI"] = calculate_rsi(df["Close"], 14)
+    df["VWAP"] = calculate_intraday_vwap(df)
+    df["Vol_SMA14"] = df["Volume"].rolling(14, min_periods=1).mean()
+
+    highs = df["High"].to_numpy(dtype=float)
+    lows = df["Low"].to_numpy(dtype=float)
+    closes = df["Close"].to_numpy(dtype=float)
+    opens = df["Open"].to_numpy(dtype=float)
+    vols = df["Volume"].to_numpy(dtype=float)
+    vol_sma = df["Vol_SMA14"].to_numpy(dtype=float)
+    ema13 = df["EMA13"].to_numpy(dtype=float)
+    rsi = df["RSI"].to_numpy(dtype=float)
+    atr = df["ATR"].to_numpy(dtype=float)
+
+    # 1. Volume Breakout Check[span_0](start_span)[span_0](end_span)
+    vol_breakout = np.zeros(n, dtype=bool)
+    for i in range(3, n):
+        highest_prev_3 = np.max(vols[i - 3 : i])
+        vol_breakout[i] = (vols[i] > (vol_sma[i] * 1.3)) and (vols[i] > highest_prev_3)
+
+    # 2. SMC State Machine Execution[span_1](start_span)[span_1](end_span)
+    trend_smc = np.zeros(n, dtype=int)
+    bull_state, bull_bars = 0, 0
+    bear_state, bear_bars = 0, 0
+    current_trend = 0
+
+    last_high, last_low = np.nan, np.nan
+    prev_high_smc, prev_low_smc = np.nan, np.nan
+
+    for i in range(pivot_smc * 2, n):
+        bull_bars += 1
+        bear_bars += 1
+
+        p_idx = i - pivot_smc
+        win_start = p_idx - pivot_smc
+        win_end = p_idx + pivot_smc + 1
+
+        if highs[p_idx] == np.max(highs[win_start:win_end]):
+            prev_high_smc = last_high
+            last_high = highs[p_idx]
+
+        if lows[p_idx] == np.min(lows[win_start:win_end]):
+            prev_low_smc = last_low
+            last_low = lows[p_idx]
+
+        bull_sweep = not np.isnan(last_low) and (lows[i] < last_low) and (closes[i] > last_low)[span_2](start_span)[span_2](end_span)
+        bear_sweep = not np.isnan(last_high) and (highs[i] > last_high) and (closes[i] < last_high)[span_3](start_span)[span_3](end_span)
+
+        bull_mss = not np.isnan(last_high) and (closes[i] > last_high) and (closes[i - 1] <= last_high)[span_4](start_span)[span_4](end_span)
+        bear_mss = not np.isnan(last_low) and (closes[i] < last_low) and (closes[i - 1] >= last_low)[span_5](start_span)[span_5](end_span)
+
+        bull_bos = (
+            not np.isnan(prev_high_smc)
+            and not np.isnan(last_high)
+            and (last_high > prev_high_smc)
+            and (closes[i] > last_high)
+            and (closes[i - 1] <= last_high)
+        )[span_6](start_span)[span_6](end_span)
+        bear_bos = (
+            not np.isnan(prev_low_smc)
+            and not np.isnan(last_low)
+            and (last_low < prev_low_smc)
+            and (closes[i] < last_low)
+            and (closes[i - 1] >= last_low)
+        )[span_7](start_span)[span_7](end_span)
+
+        bull_fvg = (lows[i] > highs[i - 2]) and ((lows[i] - highs[i - 2]) > (atr[i] * fvg_min_atr))[span_8](start_span)[span_8](end_span)
+        bear_fvg = (highs[i] < lows[i - 2]) and ((lows[i - 2] - highs[i]) > (atr[i] * fvg_min_atr))[span_9](start_span)[span_9](end_span)
+
+        # State Escalation Flow[span_10](start_span)[span_10](end_span)
+        if bull_sweep:
+            bull_state = 1
+            bull_bars = 0
+        elif bull_state >= 1 and bull_mss:
+            bull_state = 2
+            bull_bars = 0
+        elif bull_state >= 2 and (bull_bos or bull_fvg):
+            bull_state = 3 if bull_bos else 4
+            bull_bars = 0
+
+        if bull_bars > state_life:
+            bull_state = 0
+
+        if bear_sweep:
+            bear_state = 1
+            bear_bars = 0
+        elif bear_state >= 1 and bear_mss:
+            bear_state = 2
+            bear_bars = 0
+        elif bear_state >= 2 and (bear_bos or bear_fvg):
+            bear_state = 3 if bear_bos else 4
+            bear_bars = 0
+
+        if bear_bars > state_life:
+            bear_state = 0
+
+        ema_up = ema13[i] > ema13[i - 1][span_11](start_span)[span_11](end_span)
+        ema_dn = ema13[i] < ema13[i - 1][span_12](start_span)[span_12](end_span)
+
+        bull_confirm = (bull_state == 4) and (closes[i] > ema13[i]) and ema_up and vol_breakout[i] and (rsi[i] > 50)[span_13](start_span)[span_13](end_span)
+        bear_confirm = (bear_state == 4) and (closes[i] < ema13[i]) and ema_dn and vol_breakout[i] and (rsi[i] < 50)[span_14](start_span)[span_14](end_span)
+
+        if bull_confirm:
+            current_trend = 1[span_15](start_span)[span_15](end_span)
+        elif bear_confirm:
+            current_trend = -1[span_16](start_span)[span_16](end_span)
+
+        if current_trend == 1 and (closes[i] < ema13[i] and rsi[i] < 45):
+            current_trend = 0[span_17](start_span)[span_17](end_span)
+        elif current_trend == -1 and (closes[i] > ema13[i] and rsi[i] > 55):
+            current_trend = 0[span_18](start_span)[span_18](end_span)
+
+        trend_smc[i] = current_trend
+
+    df["Trend_SMC"] = trend_smc
+
+    # 3. Demand & Supply Matrix Engine[span_19](start_span)[span_19](end_span)
+    has_active_demand = np.zeros(n, dtype=bool)
+    has_active_supply = np.zeros(n, dtype=bool)
+    supply_zones, demand_zones = [], []
+
+    for i in range(pivot_matrix * 2, n):
+        p_idx = i - pivot_matrix
+        w_start = p_idx - pivot_matrix
+        w_end = p_idx + pivot_matrix + 1
+
+        is_phi = highs[p_idx] == np.max(highs[w_start:w_end])[span_20](start_span)[span_20](end_span)
+        is_plo = lows[p_idx] == np.min(lows[w_start:w_end])[span_21](start_span)[span_21](end_span)
+
+        if is_phi:
+            has_bear_fvg = not require_fvg or (
+                lows[p_idx - 1] > highs[p_idx + 1] or lows[p_idx] > highs[p_idx + 2]
+            )[span_22](start_span)[span_22](end_span)
+            if has_bear_fvg:
+                top_lvl = highs[p_idx][span_23](start_span)[span_23](end_span)
+                bot_lvl = max(opens[p_idx], closes[p_idx])[span_24](start_span)[span_24](end_span)
+                is_dup = any(s["active"] and abs(s["top"] - top_lvl) < (atr[i] * merge_thresh) for s in supply_zones)[span_25](start_span)[span_25](end_span)
+                if not is_dup:
+                    supply_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})[span_26](start_span)[span_26](end_span)
+
+        if is_plo:
+            has_bull_fvg = not require_fvg or (
+                lows[p_idx + 1] > highs[p_idx - 1] or lows[p_idx + 2] > highs[p_idx]
+            )[span_27](start_span)[span_27](end_span)
+            if has_bull_fvg:
+                top_lvl = min(opens[p_idx], closes[p_idx])[span_28](start_span)[span_28](end_span)
+                bot_lvl = lows[p_idx][span_29](start_span)[span_29](end_span)
+                is_dup = any(d["active"] and abs(d["bot"] - bot_lvl) < (atr[i] * merge_thresh) for d in demand_zones)[span_30](start_span)[span_30](end_span)
+                if not is_dup:
+                    demand_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})[span_31](start_span)[span_31](end_span)
+
+        cur_h, cur_l = highs[i], lows[i]
+        prev_h, prev_l = highs[i - 1], lows[i - 1]
+
+        for s in supply_zones:
+            if s["active"]:
+                if cur_h > s["top"]:[span_32](start_span)[span_32](end_span)
+                    s["active"] = False[span_33](start_span)[span_33](end_span)
+                else:
+                    if cur_h > s["bot"] and prev_h <= s["bot"]:[span_34](start_span)[span_34](end_span)
+                        s["tests"] += 1[span_35](start_span)[span_35](end_span)
+                    if s["tests"] >= max_tests:[span_36](start_span)[span_36](end_span)
+                        s["active"] = False[span_37](start_span)[span_37](end_span)
+
+        for d in demand_zones:
+            if d["active"]:
+                if cur_l < d["bot"]:[span_38](start_span)[span_38](end_span)
+                    d["active"] = False[span_39](start_span)[span_39](end_span)
+                else:
+                    if cur_l < d["top"] and prev_l >= d["top"]:[span_40](start_span)[span_40](end_span)
+                        d["tests"] += 1[span_41](start_span)[span_41](end_span)
+                    if d["tests"] >= max_tests:[span_42](start_span)[span_42](end_span)
+                        d["active"] = False[span_43](start_span)[span_43](end_span)
+
+        in_supply = any(s["active"] and (cur_h >= s["bot"] and cur_l <= s["top"]) for s in supply_zones)
+        in_demand = any(d["active"] and (cur_l <= d["top"] and cur_h >= d["bot"]) for d in demand_zones)
+
+        if in_supply:
+            in_demand = False
+
+        has_active_supply[i] = in_supply
+        has_active_demand[i] = in_demand
+
+    df["Active_Demand_Box"] = has_active_demand
+    df["Active_Supply_Box"] = has_active_supply
+    return df
+
+
+# =====================================================================
+# 3. PRE-MARKET & LIVE COBI SCORING ENGINE
+# =====================================================================
+def compute_live_candle_scores(df: pd.DataFrame):
+    if len(df) < 11:
+        return 0.0, 0.0
+
+    last_open = float(df["Open"].iloc[-1])
+    prev_close = float(df["Close"].iloc[-2])
+    last_atr = float(df["ATR"].iloc[-1])
+    gap = (last_open - prev_close) / (last_atr + 1e-9)
+
+    last_vol = float(df["Volume"].iloc[-1])
+    avg_vol = float(df["Volume"].rolling(10, min_periods=1).mean().iloc[-1])
+    vol_ratio = (last_vol / (avg_vol + 1e-9)) - 1.0
+
+    pms = round(0.5 * clamp(gap, -1.0, 1.0) + 0.5 * clamp(vol_ratio, -1.0, 1.0), 4)
+
+    last_close = float(df["Close"].iloc[-1])
+    last_low = float(df["Low"].iloc[-1])
+    last_high = float(df["High"].iloc[-1])
+
+    vol_weight = (last_close - last_low) - (last_high - last_close)
+    denom = (last_high - last_low) + 1e-9
+    cobi_val = (vol_weight / denom) * (last_vol / (avg_vol + 1e-9))
+    cobi = round(clamp(cobi_val, -1.0, 1.0), 4)
+
+    return pms, cobi
+
+
+# =====================================================================
+# 4. DATA ENGINE & EXPANDED SYMBOLS UNIVERSE
+# =====================================================================
+@st.cache_data(ttl=60)
+def load_intraday_data(symbol: str):
     try:
-        if isinstance(data.columns, pd.MultiIndex):
-            if symbol in data.columns.levels[0]:
-                return data[symbol].dropna()
-            elif symbol in data.columns.levels[1]:
-                return data.xs(symbol, axis=1, level=1).dropna()
+        t = yf.Ticker(symbol)
+        df_1m = t.history(period="5d", interval="1m", auto_adjust=False)
+
+        if df_1m.empty or len(df_1m) < 30:
+            df_5m = t.history(period="5d", interval="5m", auto_adjust=False)
+            if df_5m.empty or len(df_5m) < 15:
+                return pd.DataFrame(), pd.DataFrame()
+            return df_5m, df_5m
+
+        if df_1m.index.tz is None:
+            df_1m.index = df_1m.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
         else:
-            return data.dropna()
+            df_1m.index = df_1m.index.tz_convert("Asia/Kolkata")
+
+        df_1m = df_1m.between_time("09:15", "15:30")
+
+        agg_dict = {
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum",
+        }
+        df_3m = df_1m.resample("3min").agg(agg_dict).dropna()
+        df_5m = df_1m.resample("5min").agg(agg_dict).dropna()
+
+        df_3m = df_3m[df_3m["Volume"] > 0]
+        df_5m = df_5m[df_5m["Volume"] > 0]
+
+        return df_3m, df_5m
+    except Exception:
+        return pd.DataFrame(), pd.DataFrame()
+
+
+@st.cache_data(ttl=3600)
+def get_expanded_symbols():
+    fallback = [
+        "VTL.NS", "ARVIND.NS", "ITC.NS", "VEDL.NS", "COALINDIA.NS", "NTPC.NS", "TATAPOWER.NS",
+        "BPCL.NS", "HINDPETRO.NS", "WIPRO.NS", "DABUR.NS", "BEL.NS",
+        "APOLLOTYRE.NS", "AMBUJACEM.NS", "EXIDEIND.NS", "BHEL.NS",
+        "NATIONALUM.NS", "GNFC.NS", "CHAMBLFERT.NS", "UPL.NS",
+        "AARTIIND.NS", "M&MFIN.NS", "LICHSGFIN.NS", "MANAPPURAM.NS",
+        "ABCAPITAL.NS", "BIOCON.NS", "PRECWIRE.NS",
+    ]
+    try:
+        url = "https://archives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "*/*",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as response:
+            csv_data = response.read()
+            df = pd.read_csv(io.BytesIO(csv_data))
+            sym_col = [c for c in df.columns if "Symbol" in c or "SYMBOL" in c]
+            if sym_col:
+                fetched = [f"{sym.strip()}.NS" for sym in df[sym_col[0]].dropna().unique()]
+                return sorted(list(set(fetched)))
     except Exception:
         pass
-    return pd.DataFrame()
+    return sorted(list(set(fallback)))
 
-# ==================== STREAMLIT ENGINE ====================
-@st.cache_data(ttl=12, show_spinner=False)
-def fetch_live_quant_data():
-    session = create_robust_nse_session()
-    yf_symbols = [f"{s}.NS" for s in WATCHLIST]
-    t_str_all = " ".join(yf_symbols)
 
-    try:
-        data_daily = yf.download(t_str_all, period="15d", interval="1d", group_by="ticker", auto_adjust=False, progress=False, threads=True)
-        data_5m = yf.download(t_str_all, period="5d", interval="5m", group_by="ticker", auto_adjust=False, progress=False, threads=True)
-    except Exception:
-        return [], []
+# =====================================================================
+# 5. UNIFIED EVALUATION & MATRIX SCREENER
+# =====================================================================
+def evaluate_symbol(symbol: str, min_p: float = 300.0, max_p: float = 600.0):
+    df_3m, df_5m = load_intraday_data(symbol)
+    if df_5m.empty or len(df_5m) < 15 or df_3m.empty or len(df_3m) < 15:
+        return None
 
-    full_rows = []
-    filtered_rows = []
+    df_3m_calc = process_smc_matrix(df_3m)
+    df_5m_calc = process_smc_matrix(df_5m)
 
-    for sym in WATCHLIST:
-        t_str = f"{sym}.NS"
-        try:
-            df_d = extract_df(data_daily, t_str)
-            df_5 = extract_df(data_5m, t_str)
+    ltp = round(float(df_5m_calc["Close"].iloc[-1]), 2)
+    vwap_val = round(float(df_5m_calc["VWAP"].iloc[-1]), 2)
 
-            if len(df_d) < 2 or len(df_5) < 15:
-                continue
+    if not (min_p <= ltp <= max_p):
+        return None
 
-            ltp = float(df_5.iloc[-1]["Close"])
-            if not (PRICE_MIN <= ltp <= PRICE_MAX):
-                continue
+    pms_val, cobi_val = compute_live_candle_scores(df_5m_calc)
 
-            prev_close = float(df_d.iloc[-2]["Close"])
-            p_change = ((ltp - prev_close) / prev_close) * 100
+    ema_3m_trend = int(df_3m_calc["Trend_SMC"].iloc[-1])
+    ema_5m_trend = int(df_5m_calc["Trend_SMC"].iloc[-1])
 
-            today_vol = float(df_d.iloc[-1]["Volume"])
-            avg_vol_1w = df_d["Volume"].iloc[:-1].mean() if len(df_d) > 1 else today_vol
-            vol_chg_pct = ((today_vol - avg_vol_1w) / avg_vol_1w * 100) if avg_vol_1w > 0 else 0
+    ema_3m_green = ema_3m_trend == 1
+    ema_3m_red = ema_3m_trend == -1
+    ema_5m_green = ema_5m_trend == 1
+    ema_5m_red = ema_5m_trend == -1
 
-            high, low, close = float(df_d.iloc[-1]["High"]), float(df_d.iloc[-1]["Low"]), float(df_d.iloc[-1]["Close"])
-            approx_vwap = (high + low + close) / 3
-            vwap_dist_pct = ((ltp - approx_vwap) / approx_vwap) * 100
-            vwap_status = "ABOVE (+)" if vwap_dist_pct > VWAP_BUFFER_PCT else ("BELOW (-)" if vwap_dist_pct < -VWAP_BUFFER_PCT else "AT VWAP")
+    box_3m_demand = bool(df_3m_calc["Active_Demand_Box"].iloc[-1])
+    box_3m_supply = bool(df_3m_calc["Active_Supply_Box"].iloc[-1])
+    box_5m_demand = bool(df_5m_calc["Active_Demand_Box"].iloc[-1])
+    box_5m_supply = bool(df_5m_calc["Active_Supply_Box"].iloc[-1])
 
-            bs_ratio, imbalance, cobi_val, _ = fetch_live_orderbook_cobi(session, sym, p_change, today_vol)
+    buy_3m = ema_3m_green and box_3m_demand and (ltp >= vwap_val)
+    sell_3m = ema_3m_red and box_3m_supply and (ltp <= vwap_val)
+    buy_5m = ema_5m_green and box_5m_demand and (ltp >= vwap_val)
+    sell_5m = ema_5m_red and box_5m_supply and (ltp <= vwap_val)
 
-            df_3 = df_5.resample('15min').agg({'Open':'first', 'High':'max', 'Low':'min', 'Close':'last', 'Volume':'sum'}).dropna()
+    if buy_3m and buy_5m:
+        setup_t1 = "🔥 GRADE-A+ BUY (3M+5M)"
+    elif sell_3m and sell_5m:
+        setup_t1 = "💥 GRADE-A+ SELL (3M+5M)"
+    elif buy_5m:
+        setup_t1 = "🟢 GRADE-A BUY (5M)"
+    elif sell_5m:
+        setup_t1 = "🔴 GRADE-A SELL (5M)"
+    else:
+        setup_t1 = "⚪ WATCHLIST"
 
-            ema3_col, box3_t, is_bull_3m, is_bear_3m = evaluate_pine_indicator(df_3 if len(df_3) >= 15 else df_5)
-            ema5_col, box5_t, is_bull_5m, is_bear_5m = evaluate_pine_indicator(df_5)
+    base_row = {
+        "Symbol": symbol.replace(".NS", ""),
+        "LTP (₹)": ltp,
+        "VWAP (₹)": vwap_val,
+        "EMA13 (3M)": "🟢 GREEN" if ema_3m_green else "🔴 RED" if ema_3m_red else "🟡 YELLOW",
+        "Box (3M)": "🟢 DEMAND" if box_3m_demand else "🔴 SUPPLY" if box_3m_supply else "⚪ NONE",
+        "EMA13 (5M)": "🟢 GREEN" if ema_5m_green else "🔴 RED" if ema_5m_red else "🟡 YELLOW",
+        "Box (5M)": "🟢 DEMAND" if box_5m_demand else "🔴 SUPPLY" if box_5m_supply else "⚪ NONE",
+        "PMS": pms_val,
+        "COBI": cobi_val,
+    }
 
-            tr = pd.concat([df_d["High"] - df_d["Low"], (df_d["High"] - df_d["Close"].shift(1)).abs(), (df_d["Low"] - df_d["Close"].shift(1)).abs()], axis=1).max(axis=1)
-            spread = float(tr.iloc[-5:].mean()) * 1.2 if len(tr) >= 5 else 5.0
+    table2_buy = (
+        ema_3m_green
+        and ema_5m_green
+        and box_3m_demand
+        and box_5m_demand
+        and (not box_3m_supply)
+        and (not box_5m_supply)
+        and (ltp >= vwap_val)
+        and (cobi_val >= 0.20)
+    )
 
-            if (is_bull_3m or is_bull_5m) and cobi_val >= 0.35 and vwap_status == "ABOVE (+)":
-                action = "🚀 INSTITUTIONAL PRO BUY"
-            elif (is_bear_3m or is_bear_5m) and cobi_val <= -0.35 and vwap_status == "BELOW (-)":
-                action = "🔻 INSTITUTIONAL PRO SELL"
-            elif is_bull_3m and is_bull_5m:
-                action = "🟢 SMC PRO BUY (3m+5m)"
-            elif is_bull_3m or is_bull_5m:
-                action = "🟢 SMC PRO BUY"
-            elif is_bear_3m and is_bear_5m:
-                action = "🔴 SMC PRO SELL (3m+5m)"
-            elif is_bear_3m or is_bear_5m:
-                action = "🔴 SMC PRO SELL"
-            elif cobi_val >= 0.40 and p_change > 0.5 and vol_chg_pct > 10:
-                action = "🟢 STRONG BUY"
-            elif cobi_val <= -0.40 and p_change < -0.5 and vol_chg_pct > 10:
-                action = "🔴 STRONG SELL"
-            elif cobi_val > 0.25 and vwap_status == "ABOVE (+)":
-                action = "🟢 ACCUMULATION"
-            elif cobi_val < -0.25 and vwap_status == "BELOW (-)":
-                action = "🔴 DISTRIBUTION"
+    table2_sell = (
+        ema_3m_red
+        and ema_5m_red
+        and box_3m_supply
+        and box_5m_supply
+        and (not box_3m_demand)
+        and (not box_5m_demand)
+        and (ltp <= vwap_val)
+        and (cobi_val <= -0.20)
+    )
+
+    if table2_buy:
+        row_t2 = base_row.copy()
+        row_t2["Signal Setup"] = "🟢 BUY (INSTITUTIONAL)"
+        return ("T2", row_t2)
+    elif table2_sell:
+        row_t2 = base_row.copy()
+        row_t2["Signal Setup"] = "🔴 SELL (INSTITUTIONAL)"
+        return ("T2", row_t2)
+    else:
+        row_t1 = base_row.copy()
+        row_t1["Signal Setup"] = setup_t1
+        return ("T1", row_t1)
+
+
+# =====================================================================
+# 6. STREAMLIT APP UI & CONTROLS
+# =====================================================================
+st.title("⚡ Falcon Trinity Quant Screener")
+st.caption("Real-Time Multi-Timeframe Institutional SMC & VWAP Engine")
+
+# Sidebar Controls
+with st.sidebar:
+    st.header("⚙️ Configuration")
+    min_price = st.number_input("Min Price (₹)", value=300.0, step=10.0)
+    max_price = st.number_input("Max Price (₹)", value=600.0, step=10.0)
+    scan_limit = st.slider("Max Stocks to Scan", min_value=10, max_value=200, value=50, step=10)
+    auto_refresh = st.checkbox("Auto Refresh (1 Min)", value=False)
+    btn_scan = st.button("🚀 Run Live Scan", use_container_width=True)
+
+if auto_refresh:
+    time.sleep(60)
+    st.rerun()
+
+symbols = get_expanded_symbols()[:scan_limit]
+
+if btn_scan or "scanned_data" not in st.session_state:
+    table1_rows, table2_rows = [], []
+    progress_bar = st.progress(0, text="Scanning Market Universe...")
+
+    for idx, sym in enumerate(symbols):
+        progress_bar.progress((idx + 1) / len(symbols), text=f"Scanning ({idx + 1}/{len(symbols)}): {sym}")
+        res = evaluate_symbol(sym, min_price, max_price)
+        if res is not None:
+            t_type, row_data = res
+            if t_type == "T2":
+                table2_rows.append(row_data)
             else:
-                action = "🟡 SIDEWAYS"
+                table1_rows.append(row_data)
 
-            row_data = {
-                "Symbol": sym,
-                "Price": round(ltp, 2),
-                "Chg%": f"{p_change:+.2f}%",
-                "Vol%": f"{vol_chg_pct:+.2f}%",
-                "EMA(3m)": ema3_col,
-                "Box(3m)": box3_t,
-                "EMA(5m)": ema5_col,
-                "Box(5m)": box5_t,
-                "B/S": bs_ratio,
-                "Imbalance": imbalance,
-                "COBI": round(cobi_val, 2),
-                "VWAP": vwap_status,
-                "Spread": round(spread, 2),
-                "Action": action
-            }
+    progress_bar.empty()
+    st.session_state["table1_rows"] = table1_rows
+    st.session_state["table2_rows"] = table2_rows
+    st.session_state["scanned_data"] = True
 
-            if any(k in action for k in ["INSTITUTIONAL", "SMC PRO", "STRONG"]):
-                filtered_rows.append(row_data)
-            else:
-                full_rows.append(row_data)
-        except Exception:
-            continue
+table1_rows = st.session_state.get("table1_rows", [])
+table2_rows = st.session_state.get("table2_rows", [])
 
-    return filtered_rows, full_rows
+# Quick Stats Ribbon
+col1, col2, col3 = st.columns(3)
+col1.metric("Scanned Universe", f"{len(symbols)} Stocks")
+col2.metric("Watchlist Trades (T1)", f"{len(table1_rows)}")
+col3.metric("Perfect Aligned (T2)", f"{len(table2_rows)}")
 
-# ==================== STREAMLIT UI ====================
-st.title("⚡ SMC (3m/5m) + COBI Scanner")
+st.divider()
 
-col_a, col_b, col_c = st.columns([1, 1, 1])
-with col_a:
-    st.metric("Range", f"₹{int(PRICE_MIN)} - ₹{int(PRICE_MAX)}")
-with col_b:
-    st.metric("Last Sync", datetime.now().strftime("%H:%M:%S"))
-with col_c:
-    if st.button("🔄 Force Refresh"):
-        st.cache_data.clear()
-        st.rerun()
-
-high_conv_data, remaining_data = fetch_live_quant_data()
-
-st.subheader("🎯 High Conviction Trades Only")
-if high_conv_data:
-    st.dataframe(pd.DataFrame(high_conv_data), use_container_width=True, hide_index=True)
+# TABLE 2: PERFECT TRINITY ALIGNED TRADES
+st.subheader("💎 TABLE 2: 100% PERFECT TRINITY ALIGNED TRADES")
+if table2_rows:
+    df_t2 = pd.DataFrame(table2_rows).sort_values(by="Symbol")
+    st.dataframe(
+        df_t2,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+            "VWAP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+            "PMS": st.column_config.NumberColumn(format="%.4f"),
+            "COBI": st.column_config.NumberColumn(format="%.4f"),
+        },
+    )
 else:
-    st.info("⚡ No High-Conviction setups currently triggered in ₹300-₹600 range.")
+    st.info("⚠️ No strictly aligned trades available for Table 2 at this moment.")
 
-st.subheader("📊 Watchlist Scanner (Deduplicated)")
-if remaining_data:
-    st.dataframe(pd.DataFrame(remaining_data), use_container_width=True, hide_index=True)
+st.divider()
+
+# TABLE 1: WATCHLIST & GRADE-A TRADES
+st.subheader("📋 TABLE 1: QUANTITATIVE WATCHLIST & GRADE-A TRADES")
+if table1_rows:
+    df_t1 = pd.DataFrame(table1_rows).sort_values(by="Symbol")
+    st.dataframe(
+        df_t1,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+            "VWAP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
+            "PMS": st.column_config.NumberColumn(format="%.4f"),
+            "COBI": st.column_config.NumberColumn(format="%.4f"),
+        },
+    )
 else:
-    st.warning("Fetching market data or no other stocks in range...")
-
-time.sleep(15)
-st.rerun()
+    st.info("No stocks matched Table 1 criteria.")
