@@ -128,13 +128,13 @@ def process_smc_matrix(
     rsi = df["RSI"].to_numpy(dtype=float)
     atr = df["ATR"].to_numpy(dtype=float)
 
-    # 1. Volume Breakout Check[span_0](start_span)[span_0](end_span)
+    # 1. Volume Breakout Check
     vol_breakout = np.zeros(n, dtype=bool)
     for i in range(3, n):
         highest_prev_3 = np.max(vols[i - 3 : i])
         vol_breakout[i] = (vols[i] > (vol_sma[i] * 1.3)) and (vols[i] > highest_prev_3)
 
-    # 2. SMC State Machine Execution[span_1](start_span)[span_1](end_span)
+    # 2. SMC State Machine Execution
     trend_smc = np.zeros(n, dtype=int)
     bull_state, bull_bars = 0, 0
     bear_state, bear_bars = 0, 0
@@ -159,11 +159,11 @@ def process_smc_matrix(
             prev_low_smc = last_low
             last_low = lows[p_idx]
 
-        bull_sweep = not np.isnan(last_low) and (lows[i] < last_low) and (closes[i] > last_low)[span_2](start_span)[span_2](end_span)
-        bear_sweep = not np.isnan(last_high) and (highs[i] > last_high) and (closes[i] < last_high)[span_3](start_span)[span_3](end_span)
+        bull_sweep = not np.isnan(last_low) and (lows[i] < last_low) and (closes[i] > last_low)
+        bear_sweep = not np.isnan(last_high) and (highs[i] > last_high) and (closes[i] < last_high)
 
-        bull_mss = not np.isnan(last_high) and (closes[i] > last_high) and (closes[i - 1] <= last_high)[span_4](start_span)[span_4](end_span)
-        bear_mss = not np.isnan(last_low) and (closes[i] < last_low) and (closes[i - 1] >= last_low)[span_5](start_span)[span_5](end_span)
+        bull_mss = not np.isnan(last_high) and (closes[i] > last_high) and (closes[i - 1] <= last_high)
+        bear_mss = not np.isnan(last_low) and (closes[i] < last_low) and (closes[i - 1] >= last_low)
 
         bull_bos = (
             not np.isnan(prev_high_smc)
@@ -171,19 +171,19 @@ def process_smc_matrix(
             and (last_high > prev_high_smc)
             and (closes[i] > last_high)
             and (closes[i - 1] <= last_high)
-        )[span_6](start_span)[span_6](end_span)
+        )
         bear_bos = (
             not np.isnan(prev_low_smc)
             and not np.isnan(last_low)
             and (last_low < prev_low_smc)
             and (closes[i] < last_low)
             and (closes[i - 1] >= last_low)
-        )[span_7](start_span)[span_7](end_span)
+        )
 
-        bull_fvg = (lows[i] > highs[i - 2]) and ((lows[i] - highs[i - 2]) > (atr[i] * fvg_min_atr))[span_8](start_span)[span_8](end_span)
-        bear_fvg = (highs[i] < lows[i - 2]) and ((lows[i - 2] - highs[i]) > (atr[i] * fvg_min_atr))[span_9](start_span)[span_9](end_span)
+        bull_fvg = (lows[i] > highs[i - 2]) and ((lows[i] - highs[i - 2]) > (atr[i] * fvg_min_atr))
+        bear_fvg = (highs[i] < lows[i - 2]) and ((lows[i - 2] - highs[i]) > (atr[i] * fvg_min_atr))
 
-        # State Escalation Flow[span_10](start_span)[span_10](end_span)
+        # State Escalation Flow
         if bull_sweep:
             bull_state = 1
             bull_bars = 0
@@ -210,27 +210,27 @@ def process_smc_matrix(
         if bear_bars > state_life:
             bear_state = 0
 
-        ema_up = ema13[i] > ema13[i - 1][span_11](start_span)[span_11](end_span)
-        ema_dn = ema13[i] < ema13[i - 1][span_12](start_span)[span_12](end_span)
+        ema_up = ema13[i] > ema13[i - 1]
+        ema_dn = ema13[i] < ema13[i - 1]
 
-        bull_confirm = (bull_state == 4) and (closes[i] > ema13[i]) and ema_up and vol_breakout[i] and (rsi[i] > 50)[span_13](start_span)[span_13](end_span)
-        bear_confirm = (bear_state == 4) and (closes[i] < ema13[i]) and ema_dn and vol_breakout[i] and (rsi[i] < 50)[span_14](start_span)[span_14](end_span)
+        bull_confirm = (bull_state == 4) and (closes[i] > ema13[i]) and ema_up and vol_breakout[i] and (rsi[i] > 50)
+        bear_confirm = (bear_state == 4) and (closes[i] < ema13[i]) and ema_dn and vol_breakout[i] and (rsi[i] < 50)
 
         if bull_confirm:
-            current_trend = 1[span_15](start_span)[span_15](end_span)
+            current_trend = 1
         elif bear_confirm:
-            current_trend = -1[span_16](start_span)[span_16](end_span)
+            current_trend = -1
 
         if current_trend == 1 and (closes[i] < ema13[i] and rsi[i] < 45):
-            current_trend = 0[span_17](start_span)[span_17](end_span)
+            current_trend = 0
         elif current_trend == -1 and (closes[i] > ema13[i] and rsi[i] > 55):
-            current_trend = 0[span_18](start_span)[span_18](end_span)
+            current_trend = 0
 
         trend_smc[i] = current_trend
 
     df["Trend_SMC"] = trend_smc
 
-    # 3. Demand & Supply Matrix Engine[span_19](start_span)[span_19](end_span)
+    # 3. Demand & Supply Matrix Engine
     has_active_demand = np.zeros(n, dtype=bool)
     has_active_supply = np.zeros(n, dtype=bool)
     supply_zones, demand_zones = [], []
@@ -240,53 +240,53 @@ def process_smc_matrix(
         w_start = p_idx - pivot_matrix
         w_end = p_idx + pivot_matrix + 1
 
-        is_phi = highs[p_idx] == np.max(highs[w_start:w_end])[span_20](start_span)[span_20](end_span)
-        is_plo = lows[p_idx] == np.min(lows[w_start:w_end])[span_21](start_span)[span_21](end_span)
+        is_phi = highs[p_idx] == np.max(highs[w_start:w_end])
+        is_plo = lows[p_idx] == np.min(lows[w_start:w_end])
 
         if is_phi:
             has_bear_fvg = not require_fvg or (
                 lows[p_idx - 1] > highs[p_idx + 1] or lows[p_idx] > highs[p_idx + 2]
-            )[span_22](start_span)[span_22](end_span)
+            )
             if has_bear_fvg:
-                top_lvl = highs[p_idx][span_23](start_span)[span_23](end_span)
-                bot_lvl = max(opens[p_idx], closes[p_idx])[span_24](start_span)[span_24](end_span)
-                is_dup = any(s["active"] and abs(s["top"] - top_lvl) < (atr[i] * merge_thresh) for s in supply_zones)[span_25](start_span)[span_25](end_span)
+                top_lvl = highs[p_idx]
+                bot_lvl = max(opens[p_idx], closes[p_idx])
+                is_dup = any(s["active"] and abs(s["top"] - top_lvl) < (atr[i] * merge_thresh) for s in supply_zones)
                 if not is_dup:
-                    supply_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})[span_26](start_span)[span_26](end_span)
+                    supply_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
 
         if is_plo:
             has_bull_fvg = not require_fvg or (
                 lows[p_idx + 1] > highs[p_idx - 1] or lows[p_idx + 2] > highs[p_idx]
-            )[span_27](start_span)[span_27](end_span)
+            )
             if has_bull_fvg:
-                top_lvl = min(opens[p_idx], closes[p_idx])[span_28](start_span)[span_28](end_span)
-                bot_lvl = lows[p_idx][span_29](start_span)[span_29](end_span)
-                is_dup = any(d["active"] and abs(d["bot"] - bot_lvl) < (atr[i] * merge_thresh) for d in demand_zones)[span_30](start_span)[span_30](end_span)
+                top_lvl = min(opens[p_idx], closes[p_idx])
+                bot_lvl = lows[p_idx]
+                is_dup = any(d["active"] and abs(d["bot"] - bot_lvl) < (atr[i] * merge_thresh) for d in demand_zones)
                 if not is_dup:
-                    demand_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})[span_31](start_span)[span_31](end_span)
+                    demand_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
 
         cur_h, cur_l = highs[i], lows[i]
         prev_h, prev_l = highs[i - 1], lows[i - 1]
 
         for s in supply_zones:
             if s["active"]:
-                if cur_h > s["top"]:[span_32](start_span)[span_32](end_span)
-                    s["active"] = False[span_33](start_span)[span_33](end_span)
+                if cur_h > s["top"]:
+                    s["active"] = False
                 else:
-                    if cur_h > s["bot"] and prev_h <= s["bot"]:[span_34](start_span)[span_34](end_span)
-                        s["tests"] += 1[span_35](start_span)[span_35](end_span)
-                    if s["tests"] >= max_tests:[span_36](start_span)[span_36](end_span)
-                        s["active"] = False[span_37](start_span)[span_37](end_span)
+                    if cur_h > s["bot"] and prev_h <= s["bot"]:
+                        s["tests"] += 1
+                    if s["tests"] >= max_tests:
+                        s["active"] = False
 
         for d in demand_zones:
             if d["active"]:
-                if cur_l < d["bot"]:[span_38](start_span)[span_38](end_span)
-                    d["active"] = False[span_39](start_span)[span_39](end_span)
+                if cur_l < d["bot"]:
+                    d["active"] = False
                 else:
-                    if cur_l < d["top"] and prev_l >= d["top"]:[span_40](start_span)[span_40](end_span)
-                        d["tests"] += 1[span_41](start_span)[span_41](end_span)
-                    if d["tests"] >= max_tests:[span_42](start_span)[span_42](end_span)
-                        d["active"] = False[span_43](start_span)[span_43](end_span)
+                    if cur_l < d["top"] and prev_l >= d["top"]:
+                        d["tests"] += 1
+                    if d["tests"] >= max_tests:
+                        d["active"] = False
 
         in_supply = any(s["active"] and (cur_h >= s["bot"] and cur_l <= s["top"]) for s in supply_zones)
         in_demand = any(d["active"] and (cur_l <= d["top"] and cur_h >= d["bot"]) for d in demand_zones)
