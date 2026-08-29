@@ -11,14 +11,16 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-# Suppress logs and warnings
+# Suppress background logs & warnings
 warnings.filterwarnings("ignore")
 logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# Streamlit Page Configuration for Mobile / Responsive UI
+# -----------------------------------------------------------------------------
+# STREAMLIT PAGE CONFIGURATION (MOBILE RESPONSIVE LAYOUT)
+# -----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Falcon Trinity Screener",
-    page_icon="⚡",
+    page_title="SMC Quantitative Scanner",
+    page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -27,19 +29,31 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .main .block-container {
+    .block-container {
         padding-top: 1rem;
         padding-bottom: 2rem;
-        padding-left: 0.8rem;
-        padding-right: 0.8rem;
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
+    }
+    h1, h2, h3 {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    .metric-card {
+        background-color: #1E222D;
+        border: 1px solid #2A2E39;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 10px;
+        color: #FFFFFF;
     }
     .stDataFrame {
-        width: 100%;
+        width: 100% !important;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
 
 # =====================================================================
 # 1. CORE MATHEMATICAL & TECHNICAL INDICATORS
@@ -85,23 +99,24 @@ def calculate_intraday_vwap(df: pd.DataFrame) -> pd.Series:
 
 
 # =====================================================================
-# 2. OPTIMIZED SMC STATE & DEMAND/SUPPLY MATRIX ENGINE
+# 2. EXACT PINE SCRIPT SMC STATE MACHINE & MATRIX ENGINE
 # =====================================================================
 def process_smc_matrix(
     df: pd.DataFrame,
     pivot_matrix: int = 2,
-    pivot_smc: int = 3,
-    state_life: int = 40,
-    fvg_min_atr: float = 0.08,
+    pivot_smc: int = 5,
+    state_life: int = 30,
+    fvg_min_atr: float = 0.1,
     merge_thresh: float = 0.3,
     max_tests: int = 4,
+    require_fvg: bool = False,
 ) -> pd.DataFrame:
     df = df.copy()
     n = len(df)
-    if n < 15:
+    if n < max(pivot_smc * 2 + 5, 20):
         return df
 
-    # Ribbon EMAs (8, 13, 21)
+    # Ribbon EMAs & Quant Baselines (8, 13, 21)
     df["EMA8"] = df["Close"].ewm(span=8, adjust=False).mean()
     df["EMA13"] = df["Close"].ewm(span=13, adjust=False).mean()
     df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
@@ -116,38 +131,116 @@ def process_smc_matrix(
     opens = df["Open"].to_numpy(dtype=float)
     vols = df["Volume"].to_numpy(dtype=float)
     vol_sma = df["Vol_SMA14"].to_numpy(dtype=float)
-    ema8 = df["EMA8"].to_numpy(dtype=float)
     ema13 = df["EMA13"].to_numpy(dtype=float)
-    ema21 = df["EMA21"].to_numpy(dtype=float)
     rsi = df["RSI"].to_numpy(dtype=float)
     atr = df["ATR"].to_numpy(dtype=float)
 
-    # 1. SMC Ribbon & Dynamic EMA13 Logic
+    # 1. Volume Breakout Check
+    vol_breakout = np.zeros(n, dtype=bool)
+    for i in range(3, n):
+        highest_prev_3 = np.max(vols[i - 3 : i])
+        vol_breakout[i] = (vols[i] > (vol_sma[i] * 1.3)) and (vols[i] > highest_prev_3)
+
+    # 2. SMC State Machine Execution
     trend_smc = np.zeros(n, dtype=int)
-    for i in range(1, n):
-        ema_up = ema13[i] >= ema13[i - 1]
-        ema_dn = ema13[i] <= ema13[i - 1]
-        
-        # Bullish: Ribbon Stack ya Strong Momentum over EMA13
-        bull_cond = (closes[i] >= ema8[i] and ema8[i] >= ema13[i] and ema13[i] >= ema21[i]) or (
-            closes[i] >= ema13[i] and ema_up and rsi[i] >= 50
+    bull_state, bull_bars = 0, 0
+    bear_state, bear_bars = 0, 0
+    current_trend = 0
+
+    last_high, last_low = np.nan, np.nan
+    prev_high_smc, prev_low_smc = np.nan, np.nan
+
+    for i in range(pivot_smc * 2, n):
+        bull_bars += 1
+        bear_bars += 1
+
+        # Pine ta.pivothigh / ta.pivotlow exact window
+        p_idx = i - pivot_smc
+        win_start = p_idx - pivot_smc
+        win_end = p_idx + pivot_smc + 1
+
+        if highs[p_idx] == np.max(highs[win_start:win_end]):
+            prev_high_smc = last_high
+            last_high = highs[p_idx]
+
+        if lows[p_idx] == np.min(lows[win_start:win_end]):
+            prev_low_smc = last_low
+            last_low = lows[p_idx]
+
+        # Structural Check
+        bull_sweep = not np.isnan(last_low) and (lows[i] < last_low) and (closes[i] > last_low)
+        bear_sweep = not np.isnan(last_high) and (highs[i] > last_high) and (closes[i] < last_high)
+
+        bull_mss = not np.isnan(last_high) and (closes[i] > last_high) and (closes[i - 1] <= last_high)
+        bear_mss = not np.isnan(last_low) and (closes[i] < last_low) and (closes[i - 1] >= last_low)
+
+        bull_bos = (
+            not np.isnan(prev_high_smc)
+            and not np.isnan(last_high)
+            and (last_high > prev_high_smc)
+            and (closes[i] > last_high)
+            and (closes[i - 1] <= last_high)
         )
-        
-        # Bearish: Ribbon Stack ya Strong Drag under EMA13
-        bear_cond = (closes[i] <= ema8[i] and ema8[i] <= ema13[i] and ema13[i] <= ema21[i]) or (
-            closes[i] <= ema13[i] and ema_dn and rsi[i] <= 50
+        bear_bos = (
+            not np.isnan(prev_low_smc)
+            and not np.isnan(last_low)
+            and (last_low < prev_low_smc)
+            and (closes[i] < last_low)
+            and (closes[i - 1] >= last_low)
         )
 
-        if bull_cond:
-            trend_smc[i] = 1
-        elif bear_cond:
-            trend_smc[i] = -1
-        else:
-            trend_smc[i] = 0
+        bull_fvg = (lows[i] > highs[i - 2]) and ((lows[i] - highs[i - 2]) > (atr[i] * fvg_min_atr))
+        bear_fvg = (highs[i] < lows[i - 2]) and ((lows[i - 2] - highs[i]) > (atr[i] * fvg_min_atr))
+
+        # State Escalation Flow (Strict Non-Skipping Order)
+        if bull_sweep:
+            bull_state = 1
+            bull_bars = 0
+        elif bull_state >= 1 and bull_mss:
+            bull_state = 2
+            bull_bars = 0
+        elif bull_state >= 2 and (bull_bos or bull_fvg):
+            bull_state = 3 if bull_bos else 4
+            bull_bars = 0
+
+        if bull_bars > state_life:
+            bull_state = 0
+
+        if bear_sweep:
+            bear_state = 1
+            bear_bars = 0
+        elif bear_state >= 1 and bear_mss:
+            bear_state = 2
+            bear_bars = 0
+        elif bear_state >= 2 and (bear_bos or bear_fvg):
+            bear_state = 3 if bear_bos else 4
+            bear_bars = 0
+
+        if bear_bars > state_life:
+            bear_state = 0
+
+        ema_up = ema13[i] > ema13[i - 1]
+        ema_dn = ema13[i] < ema13[i - 1]
+
+        bull_confirm = (bull_state == 4) and (closes[i] > ema13[i]) and ema_up and vol_breakout[i] and (rsi[i] > 50)
+        bear_confirm = (bear_state == 4) and (closes[i] < ema13[i]) and ema_dn and vol_breakout[i] and (rsi[i] < 50)
+
+        if bull_confirm:
+            current_trend = 1
+        elif bear_confirm:
+            current_trend = -1
+
+        # State Invalidation
+        if current_trend == 1 and (closes[i] < ema13[i] and rsi[i] < 45):
+            current_trend = 0
+        elif current_trend == -1 and (closes[i] > ema13[i] and rsi[i] > 55):
+            current_trend = 0
+
+        trend_smc[i] = current_trend
 
     df["Trend_SMC"] = trend_smc
 
-    # 2. Demand & Supply Matrix Processing
+    # 3. Demand & Supply Matrix Engine
     has_active_demand = np.zeros(n, dtype=bool)
     has_active_supply = np.zeros(n, dtype=bool)
     supply_zones, demand_zones = [], []
@@ -160,42 +253,57 @@ def process_smc_matrix(
         is_phi = highs[p_idx] == np.max(highs[w_start:w_end])
         is_plo = lows[p_idx] == np.min(lows[w_start:w_end])
 
+        # Supply Zone Creation
         if is_phi:
-            top_lvl = highs[p_idx]
-            bot_lvl = max(opens[p_idx], closes[p_idx])
-            is_dup = any(s["active"] and abs(s["top"] - top_lvl) < (atr[i] * merge_thresh) for s in supply_zones)
-            if not is_dup:
-                supply_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
+            has_bear_fvg = not require_fvg or (
+                lows[p_idx - 1] > highs[p_idx + 1] or lows[p_idx] > highs[p_idx + 2]
+            )
+            if has_bear_fvg:
+                top_lvl = highs[p_idx]
+                bot_lvl = max(opens[p_idx], closes[p_idx])
+                is_dup = any(s["active"] and abs(s["top"] - top_lvl) < (atr[i] * merge_thresh) for s in supply_zones)
+                if not is_dup:
+                    supply_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
 
+        # Demand Zone Creation
         if is_plo:
-            top_lvl = min(opens[p_idx], closes[p_idx])
-            bot_lvl = lows[p_idx]
-            is_dup = any(d["active"] and abs(d["bot"] - bot_lvl) < (atr[i] * merge_thresh) for d in demand_zones)
-            if not is_dup:
-                demand_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
+            has_bull_fvg = not require_fvg or (
+                lows[p_idx + 1] > highs[p_idx - 1] or lows[p_idx + 2] > highs[p_idx]
+            )
+            if has_bull_fvg:
+                top_lvl = min(opens[p_idx], closes[p_idx])
+                bot_lvl = lows[p_idx]
+                is_dup = any(d["active"] and abs(d["bot"] - bot_lvl) < (atr[i] * merge_thresh) for d in demand_zones)
+                if not is_dup:
+                    demand_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
 
         cur_h, cur_l = highs[i], lows[i]
+        prev_h, prev_l = highs[i - 1], lows[i - 1]
 
+        # Supply Mitigations & Invalidation
         for s in supply_zones:
             if s["active"]:
                 if cur_h > s["top"]:
                     s["active"] = False
-                elif cur_h >= s["bot"]:
-                    s["tests"] += 1
+                else:
+                    if cur_h > s["bot"] and prev_h <= s["bot"]:
+                        s["tests"] += 1
                     if s["tests"] >= max_tests:
                         s["active"] = False
 
+        # Demand Mitigations & Invalidation
         for d in demand_zones:
             if d["active"]:
                 if cur_l < d["bot"]:
                     d["active"] = False
-                elif cur_l <= d["top"]:
-                    d["tests"] += 1
+                else:
+                    if cur_l < d["top"] and prev_l >= d["top"]:
+                        d["tests"] += 1
                     if d["tests"] >= max_tests:
                         d["active"] = False
 
-        in_supply = any(s["active"] and (cur_h >= s["bot"] and cur_l <= s["top"] * 1.002) for s in supply_zones)
-        in_demand = any(d["active"] and (cur_l <= d["top"] and cur_h >= d["bot"] * 0.998) for d in demand_zones)
+        in_supply = any(s["active"] and (cur_h >= s["bot"] and cur_l <= s["top"]) for s in supply_zones)
+        in_demand = any(d["active"] and (cur_l <= d["top"] and cur_h >= d["bot"]) for d in demand_zones)
 
         if in_supply:
             in_demand = False
@@ -209,9 +317,96 @@ def process_smc_matrix(
 
 
 # =====================================================================
-# 3. PRE-MARKET & LIVE COBI ENGINE
+# 3. PRE-MARKET SCORE & LIVE ORDER BOOK COBI ENGINE
 # =====================================================================
+def calculate_pms(
+    pre_market_volume: float,
+    avg_pre_market_volume_10d: float,
+    total_buy_qty: float,
+    total_sell_qty: float,
+    pre_open_price: float,
+    yesterday_close: float,
+    atr_10d: float,
+    stock_pre_open_gap_pct: float = 0.0,
+    nifty_pre_open_gap_pct: float = 0.0,
+    max_call_oi_strike: float = 0.0,
+) -> float:
+    w1, w2, w3, w4, w5 = 0.30, 0.25, 0.20, 0.15, 0.10
+
+    vol_ratio = ((pre_market_volume / avg_pre_market_volume_10d) - 1.0) if avg_pre_market_volume_10d > 0 else 0.0
+    V_n = clamp(vol_ratio, -1.0, 1.0)
+
+    total_depth = total_buy_qty + total_sell_qty
+    D_n = ((total_buy_qty - total_sell_qty) / total_depth) if total_depth > 0 else 0.0
+
+    gap_points = pre_open_price - yesterday_close
+    G_n = clamp(gap_points / atr_10d, -1.0, 1.0) if atr_10d > 0 else 0.0
+
+    rs_ratio = (
+        (stock_pre_open_gap_pct / nifty_pre_open_gap_pct) - 1.0
+        if nifty_pre_open_gap_pct != 0
+        else stock_pre_open_gap_pct
+    )
+    RS_n = clamp(rs_ratio, -1.0, 1.0)
+
+    strike_distance_atr = (
+        (abs(pre_open_price - max_call_oi_strike) / atr_10d)
+        if (atr_10d > 0 and max_call_oi_strike > 0)
+        else 0.0
+    )
+    OI_n = clamp(1.0 - strike_distance_atr, 0.0, 1.0) if max_call_oi_strike > 0 else 0.0
+
+    pms_score = (w1 * V_n) + (w2 * D_n) + (w3 * G_n) + (w4 * RS_n) - (w5 * OI_n)
+    return round(pms_score, 4)
+
+
+def calculate_cobi(
+    bids: list,
+    asks: list,
+    total_bid_qty: float = None,
+    total_ask_qty: float = None,
+    weights=(0.3, 0.4, 0.3),
+) -> float:
+    w1, w2, w3 = weights
+
+    bid_prices = np.array([b[0] for b in bids], dtype=float) if bids else np.array([])
+    bid_qtys = np.array([b[1] for b in bids], dtype=float) if bids else np.array([])
+    ask_prices = np.array([a[0] for a in asks], dtype=float) if asks else np.array([])
+    ask_qtys = np.array([a[1] for a in asks], dtype=float) if asks else np.array([])
+
+    tot_b = total_bid_qty if total_bid_qty is not None else np.sum(bid_qtys)
+    tot_a = total_ask_qty if total_ask_qty is not None else np.sum(ask_qtys)
+    obir = (tot_b - tot_a) / (tot_b + tot_a) if (tot_b + tot_a) > 0 else 0.0
+
+    depth = min(len(bid_qtys), len(ask_qtys))
+    if depth > 0:
+        depth_weights = 1.0 / np.arange(1, depth + 1)
+        w_bid_sum = np.sum(bid_qtys[:depth] * depth_weights)
+        w_ask_sum = np.sum(ask_qtys[:depth] * depth_weights)
+        wob = (w_bid_sum - w_ask_sum) / (w_bid_sum + w_ask_sum) if (w_bid_sum + w_ask_sum) > 0 else 0.0
+    else:
+        wob = 0.0
+
+    if len(bid_prices) > 0 and len(ask_prices) > 0:
+        p_bid1, q_bid1 = bid_prices[0], bid_qtys[0]
+        p_ask1, q_ask1 = ask_prices[0], ask_qtys[0]
+        spread = p_ask1 - p_bid1
+        p_mid = (p_bid1 + p_ask1) / 2.0
+
+        if (q_bid1 + q_ask1) > 0 and spread > 0:
+            p_micro = (p_bid1 * q_ask1 + p_ask1 * q_bid1) / (q_bid1 + q_ask1)
+            mpdr = (p_micro - p_mid) / (spread / 2.0)
+        else:
+            mpdr = 0.0
+    else:
+        mpdr = 0.0
+
+    cobi_score = (w1 * obir) + (w2 * wob) + (w3 * mpdr)
+    return round(clamp(cobi_score, -1.0, 1.0), 4)
+
+
 def compute_live_candle_scores(df: pd.DataFrame):
+    """Fallback proxy calculation when raw L2 depth stream is unavailable."""
     if len(df) < 11:
         return 0.0, 0.0
 
@@ -241,7 +436,6 @@ def compute_live_candle_scores(df: pd.DataFrame):
 # =====================================================================
 # 4. DATA ENGINE & EXPANDED SYMBOLS UNIVERSE
 # =====================================================================
-@st.cache_data(ttl=60)
 def load_intraday_data(symbol: str):
     try:
         t = yf.Ticker(symbol)
@@ -310,9 +504,9 @@ def get_expanded_symbols():
 
 
 # =====================================================================
-# 5. UNIFIED EVALUATION & TABLE ROUTING
+# 5. UNIFIED EVALUATION & MATRIX SCREENER
 # =====================================================================
-def evaluate_symbol(symbol: str, min_p: float = 300.0, max_p: float = 600.0):
+def evaluate_symbol(symbol: str):
     df_3m, df_5m = load_intraday_data(symbol)
     if df_5m.empty or len(df_5m) < 15 or df_3m.empty or len(df_3m) < 15:
         return None
@@ -323,8 +517,8 @@ def evaluate_symbol(symbol: str, min_p: float = 300.0, max_p: float = 600.0):
     ltp = round(float(df_5m_calc["Close"].iloc[-1]), 2)
     vwap_val = round(float(df_5m_calc["VWAP"].iloc[-1]), 2)
 
-    # Price Filter
-    if not (min_p <= ltp <= max_p):
+    # Strictly Filter Range ₹300 - ₹600
+    if not (300.0 <= ltp <= 600.0):
         return None
 
     pms_val, cobi_val = compute_live_candle_scores(df_5m_calc)
@@ -342,14 +536,19 @@ def evaluate_symbol(symbol: str, min_p: float = 300.0, max_p: float = 600.0):
     box_5m_demand = bool(df_5m_calc["Active_Demand_Box"].iloc[-1])
     box_5m_supply = bool(df_5m_calc["Active_Supply_Box"].iloc[-1])
 
-    # Table 1 Setup Tagging
-    if ema_3m_green and ema_5m_green and ltp >= vwap_val:
+    # Rule Validations
+    buy_3m = ema_3m_green and box_3m_demand and (ltp >= vwap_val)
+    sell_3m = ema_3m_red and box_3m_supply and (ltp <= vwap_val)
+    buy_5m = ema_5m_green and box_5m_demand and (ltp >= vwap_val)
+    sell_5m = ema_5m_red and box_5m_supply and (ltp <= vwap_val)
+
+    if buy_3m and buy_5m:
         setup_t1 = "🔥 GRADE-A+ BUY (3M+5M)"
-    elif ema_3m_red and ema_5m_red and ltp <= vwap_val:
+    elif sell_3m and sell_5m:
         setup_t1 = "💥 GRADE-A+ SELL (3M+5M)"
-    elif ema_5m_green and ltp >= vwap_val:
+    elif buy_5m:
         setup_t1 = "🟢 GRADE-A BUY (5M)"
-    elif ema_5m_red and ltp <= vwap_val:
+    elif sell_5m:
         setup_t1 = "🔴 GRADE-A SELL (5M)"
     else:
         setup_t1 = "⚪ WATCHLIST"
@@ -366,27 +565,27 @@ def evaluate_symbol(symbol: str, min_p: float = 300.0, max_p: float = 600.0):
         "COBI": cobi_val,
     }
 
-    # Table 2 Perfect Alignment: 
-    # 1. 3M + 5M EMA13 dono same direction (GREEN/RED)
-    # 2. Price VWAP ke sahi side ho
-    # 3. Opposite Supply/Demand Zone me na fasa ho
-    # 4. Positive COBI support
+    # Strict Table 2 Condition: Multi-Timeframe Alignment + Pure Clean Zones + COBI Imbalance Edge
     table2_buy = (
         ema_3m_green
         and ema_5m_green
-        and (ltp >= vwap_val)
+        and box_3m_demand
+        and box_5m_demand
         and (not box_3m_supply)
         and (not box_5m_supply)
-        and (cobi_val >= 0.05)
+        and (ltp >= vwap_val)
+        and (cobi_val >= 0.20)
     )
 
     table2_sell = (
         ema_3m_red
         and ema_5m_red
-        and (ltp <= vwap_val)
+        and box_3m_supply
+        and box_5m_supply
         and (not box_3m_demand)
         and (not box_5m_demand)
-        and (cobi_val <= -0.05)
+        and (ltp <= vwap_val)
+        and (cobi_val <= -0.20)
     )
 
     if table2_buy:
@@ -404,33 +603,47 @@ def evaluate_symbol(symbol: str, min_p: float = 300.0, max_p: float = 600.0):
 
 
 # =====================================================================
-# 6. STREAMLIT APP UI & CONTROLS
+# 6. STREAMLIT MOBILE APP UI & EXECUTION
 # =====================================================================
-st.title("⚡ Falcon Trinity Quant Screener")
-st.caption("Real-Time Multi-Timeframe Institutional SMC & VWAP Engine")
+def main():
+    st.markdown("### 📊 SMC & Trinity Quantitative Screener")
+    st.caption("Live 3M/5M SMC Matrix Engine • Filter Range: ₹300 - ₹600")
 
-# Sidebar Controls
-with st.sidebar:
-    st.header("⚙️ Configuration")
-    min_price = st.number_input("Min Price (₹)", value=300.0, step=10.0)
-    max_price = st.number_input("Max Price (₹)", value=600.0, step=10.0)
-    scan_limit = st.slider("Max Stocks to Scan", min_value=10, max_value=250, value=75, step=10)
-    auto_refresh = st.checkbox("Auto Refresh (1 Min)", value=False)
-    btn_scan = st.button("🚀 Run Live Scan", use_container_width=True)
+    symbols = get_expanded_symbols()
 
-if auto_refresh:
-    time.sleep(60)
-    st.rerun()
+    # Sidebar Controls
+    with st.sidebar:
+        st.header("⚙️ Controls")
+        st.write(f"**Loaded Universe:** {len(symbols)} Stocks")
+        scan_mode = st.radio(
+            "Scan Mode",
+            ["High Priority Watchlist (Fast)", "Full Market Universe (Deep Scan)"],
+            index=0,
+        )
+        refresh_btn = st.button("🔄 Scan Market Now", use_container_width=True)
 
-symbols = get_expanded_symbols()[:scan_limit]
+    if scan_mode == "High Priority Watchlist (Fast)":
+        active_symbols = [
+            "VTL.NS", "ARVIND.NS", "ITC.NS", "VEDL.NS", "COALINDIA.NS", "NTPC.NS", "TATAPOWER.NS",
+            "BPCL.NS", "HINDPETRO.NS", "WIPRO.NS", "DABUR.NS", "BEL.NS",
+            "APOLLOTYRE.NS", "AMBUJACEM.NS", "EXIDEIND.NS", "BHEL.NS",
+            "NATIONALUM.NS", "GNFC.NS", "CHAMBLFERT.NS", "UPL.NS",
+            "AARTIIND.NS", "M&MFIN.NS", "LICHSGFIN.NS", "MANAPPURAM.NS",
+            "ABCAPITAL.NS", "BIOCON.NS", "PRECWIRE.NS",
+        ]
+    else:
+        active_symbols = symbols
 
-if btn_scan or "scanned_data" not in st.session_state:
+    progress_bar = st.progress(0, text="Ready to scan...")
+    status_text = st.empty()
+
     table1_rows, table2_rows = [], []
-    progress_bar = st.progress(0, text="Scanning Market Universe...")
+    total_count = len(active_symbols)
 
-    for idx, sym in enumerate(symbols):
-        progress_bar.progress((idx + 1) / len(symbols), text=f"Scanning ({idx + 1}/{len(symbols)}): {sym}")
-        res = evaluate_symbol(sym, min_price, max_price)
+    for idx, sym in enumerate(active_symbols):
+        progress_val = (idx + 1) / total_count
+        progress_bar.progress(progress_val, text=f"Analyzing {sym} ({idx+1}/{total_count})...")
+        res = evaluate_symbol(sym)
         if res is not None:
             t_type, row_data = res
             if t_type == "T2":
@@ -439,55 +652,49 @@ if btn_scan or "scanned_data" not in st.session_state:
                 table1_rows.append(row_data)
 
     progress_bar.empty()
-    st.session_state["table1_rows"] = table1_rows
-    st.session_state["table2_rows"] = table2_rows
-    st.session_state["scanned_data"] = True
+    status_text.empty()
 
-table1_rows = st.session_state.get("table1_rows", [])
-table2_rows = st.session_state.get("table2_rows", [])
+    if table1_rows:
+        table1_rows.sort(key=lambda x: x["Symbol"])
+    if table2_rows:
+        table2_rows.sort(key=lambda x: x["Symbol"])
 
-# Quick Stats Ribbon
-col1, col2, col3 = st.columns(3)
-col1.metric("Scanned Universe", f"{len(symbols)} Stocks")
-col2.metric("Watchlist Trades (T1)", f"{len(table1_rows)}")
-col3.metric("Perfect Aligned (T2)", f"{len(table2_rows)}")
+    # Metrics Summary Row
+    col_m1, col_m2, col_m3 = st.columns(3)
+    col_m1.metric("Total Scanned", f"{total_count}")
+    col_m2.metric("Table 1 Signals", f"{len(table1_rows)}")
+    col_m3.metric("Table 2 Trinity", f"{len(table2_rows)}")
 
-st.divider()
+    # -------------------------------------------------------------
+    # TABLE 2 DISPLAY (INSTITUTIONAL ALIGNED TRADES)
+    # -------------------------------------------------------------
+    st.markdown("#### 💎 TABLE 2: 100% PERFECT TRINITY ALIGNED TRADES")
+    if table2_rows:
+        df_t2 = pd.DataFrame(table2_rows)
+        st.dataframe(
+            df_t2,
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("⚠️ No strictly aligned trades available for Table 2 right now.")
 
-# TABLE 2: PERFECT TRINITY ALIGNED TRADES
-st.subheader("💎 TABLE 2: 100% PERFECT TRINITY ALIGNED TRADES")
-if table2_rows:
-    df_t2 = pd.DataFrame(table2_rows).sort_values(by="Symbol")
-    st.dataframe(
-        df_t2,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-            "VWAP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-            "PMS": st.column_config.NumberColumn(format="%.4f"),
-            "COBI": st.column_config.NumberColumn(format="%.4f"),
-        },
-    )
-else:
-    st.info("⚠️ No strictly aligned trades available for Table 2 at this moment.")
+    st.markdown("---")
 
-st.divider()
+    # -------------------------------------------------------------
+    # TABLE 1 DISPLAY (QUANTITATIVE WATCHLIST & GRADE-A)
+    # -------------------------------------------------------------
+    st.markdown("#### 📋 TABLE 1: QUANTITATIVE WATCHLIST & GRADE-A TRADES")
+    if table1_rows:
+        df_t1 = pd.DataFrame(table1_rows)
+        st.dataframe(
+            df_t1,
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.warning("No stocks matched Table 1 criteria in the current price range (₹300 - ₹600).")
 
-# TABLE 1: WATCHLIST & GRADE-A TRADES
-st.subheader("📋 TABLE 1: QUANTITATIVE WATCHLIST & GRADE-A TRADES")
-if table1_rows:
-    df_t1 = pd.DataFrame(table1_rows).sort_values(by="Symbol")
-    st.dataframe(
-        df_t1,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "LTP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-            "VWAP (₹)": st.column_config.NumberColumn(format="₹%.2f"),
-            "PMS": st.column_config.NumberColumn(format="%.4f"),
-            "COBI": st.column_config.NumberColumn(format="%.4f"),
-        },
-    )
-else:
-    st.info("No stocks matched Table 1 criteria.")
+
+if __name__ == "__main__":
+    main()
