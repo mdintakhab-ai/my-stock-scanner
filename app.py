@@ -4,45 +4,63 @@ import sys
 import time
 import warnings
 from typing import Dict, List, Tuple
+
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 
+# Suppress all deprecation and runtime warnings
+warnings.filterwarnings("ignore")
+os.environ["PYTHONWARNINGS"] = "ignore"
+
 # ------------------------------------------------------------------
-# 0. STREAMLIT PAGE CONFIG & MOBILE LANDSCAPE ZOOM VIEWPORT
+# STREAMLIT MOBILE & LANDSCAPE ULTRA-FIT CONFIGURATION
 # ------------------------------------------------------------------
 st.set_page_config(
     page_title="Institutional SMC & Order Flow Radar",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# Enable pinch-to-zoom and responsive landscape single-page scaling
+# Custom Viewport & Mobile Auto-Fit Zoom CSS
 st.markdown(
     """
     <head>
-        <meta name="viewport" content="width=device-width, initial-scale=0.75, minimum-scale=0.2, maximum-scale=5.0, user-scalable=yes">
+        <meta name="viewport" content="width=device-width, initial-scale=0.85, minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes">
     </head>
     <style>
+        /* Remove default Streamlit top/bottom margins to fit screen */
         .block-container {
             padding-top: 0.5rem !important;
             padding-bottom: 0.5rem !important;
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
+            padding-left: 0.4rem !important;
+            padding-right: 0.4rem !important;
             max-width: 100% !important;
         }
         header, footer {visibility: hidden !important;}
-        body {background-color: #0E1118;}
+        #MainMenu {visibility: hidden !important;}
+        
+        /* Enable smooth horizontal scrolling and full pinch-to-zoom */
+        .radar-container {
+            width: 100% !important;
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+        }
+        
+        /* Optimize font rendering on mobile screens */
+        table {
+            border-spacing: 0 !important;
+            font-feature-settings: "tnum" !important;
+            font-variant-numeric: tabular-nums !important;
+        }
     </style>
     """,
     unsafe_allow_html=True
 )
-
-# Suppress all notebook deprecation and runtime warnings
-warnings.filterwarnings("ignore")
-os.environ["PYTHONWARNINGS"] = "ignore"
 
 # ------------------------------------------------------------------
 # 1. MATHEMATICAL & TECHNICAL CALCULATORS
@@ -286,10 +304,10 @@ symbols = fetch_nse_symbols()
 ticker_list = [f"{sym}.NS" for sym in symbols]
 
 # ------------------------------------------------------------------
-# 6. LIVE SCANNER ENGINE (STREAMLIT INTEGRATED)
+# 6. LIVE SCANNER ENGINE (STREAMLIT CONTINUOUS RUNNER)
 # ------------------------------------------------------------------
 REFRESH_SECONDS = 30
-radar_placeholder = st.empty()
+main_placeholder = st.empty()
 
 while True:
     results = []
@@ -467,12 +485,12 @@ while True:
                 continue
 
     # ------------------------------------------------------------------
-    # 7. ULTRA-COMPACT PROFESSIONAL RADAR UI (STREAMLIT RENDER)
+    # 7. ULTRA-COMPACT PROFESSIONAL RADAR UI
     # ------------------------------------------------------------------
     current_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%H:%M:%S")
     df_trades = pd.DataFrame(results)
 
-    with radar_placeholder.container():
+    with main_placeholder.container():
         if not df_trades.empty:
             df_trades = df_trades.sort_values(by=["PMS", "COBI"], ascending=False)
             rows_html = ""
@@ -532,7 +550,7 @@ while True:
                 """
 
             custom_table = f"""
-            <div style="background-color: #0E1118; padding: 10px 12px; border-radius: 8px; border: 1px solid #1E222D; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; width: 100%; box-sizing: border-box;">
+            <div class="radar-container" style="background-color: #0E1118; padding: 10px 12px; border-radius: 8px; border: 1px solid #1E222D; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #1E222D; padding-bottom: 8px;">
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <span style="display: inline-block; width: 8px; height: 8px; background: #00E676; border-radius: 50%; box-shadow: 0 0 6px #00E676;"></span>
@@ -540,7 +558,7 @@ while True:
                     </div>
                     <span style="color: #00E676; font-size: 11.5px; font-weight: 600;">● LIVE ({current_time} IST) &nbsp;|&nbsp; <span style="color: #788293;">Nifty: {nifty_pct_chg}% &nbsp;|&nbsp; ₹300-₹600</span></span>
                 </div>
-                <div style="overflow-x: auto; width: 100%;">
+                <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
                     <table style="width: 100%; border-collapse: collapse; font-size: 11.5px; line-height: 1.2;">
                         <thead>
                             <tr style="border-bottom: 1.5px solid #232733; color: #6C7688; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.6px;">
@@ -572,7 +590,7 @@ while True:
         else:
             st.markdown(
                 f"""
-                <div style="background-color: #0E1118; padding: 16px; border-radius: 8px; border: 1px solid #1E222D; color: #DFE5F2; font-family: sans-serif; font-size: 13px;">
+                <div style="background-color: #0E1118; padding: 16px; border-radius: 8px; border: 1px solid #1E222D; color: #8F9CA9; font-size: 13px; font-family: sans-serif;">
                     [{current_time} IST] 🔍 Market scanning ₹300-₹600 universe... No clean setups right now.
                 </div>
                 """,
