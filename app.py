@@ -10,7 +10,7 @@ import yfinance as yf
 warnings.filterwarnings("ignore")
 
 # ------------------------------------------------------------------
-# STREAMLIT MOBILE-FIRST APP CONFIG
+# STREAMLIT PAGE CONFIG & MOBILE OPTIMIZATION
 # ------------------------------------------------------------------
 st.set_page_config(
     page_title="Institutional SMC & Order Flow Radar",
@@ -19,10 +19,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# Custom Responsive CSS for Mobile Screens & Full-width table display
 st.markdown(
-    """
-    <style>
+    """<style>
     .block-container {
         padding-top: 1rem;
         padding-bottom: 2rem;
@@ -32,8 +30,7 @@ st.markdown(
     header {visibility: hidden;}
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    </style>
-    """,
+    </style>""",
     unsafe_allow_html=True,
 )
 
@@ -165,7 +162,6 @@ def run_smc_state_machine(
         bull_bars += 1
         bear_bars += 1
 
-        # Causal Pivot High & Low Detection (No forward-looking leak)
         p_idx = i - pivot_len
         left_highs = high[p_idx - pivot_len : p_idx]
         right_highs = high[p_idx + 1 : i + 1]
@@ -179,7 +175,6 @@ def run_smc_state_machine(
             if low[p_idx] <= np.min(left_lows) and low[p_idx] <= np.min(right_lows):
                 last_low = low[p_idx]
 
-        # Sweeps, MSS & FVG Checks
         bull_sweep = not np.isnan(last_low) and low[i] < last_low and close[i] > last_low
         bull_mss = not np.isnan(last_high) and close[i] > last_high and close[i - 1] <= last_high
         bull_fvg = (low[i] - high[i - 2]) > (atr[i] * fvg_min_atr) if i >= 2 else False
@@ -188,7 +183,6 @@ def run_smc_state_machine(
         bear_mss = not np.isnan(last_low) and close[i] < last_low and close[i - 1] >= last_low
         bear_fvg = (low[i - 2] - high[i]) > (atr[i] * fvg_min_atr) if i >= 2 else False
 
-        # State Transitions
         if bull_sweep:
             bull_state, bull_bars = 1, 0
         if bull_state >= 1 and bull_mss:
@@ -286,21 +280,17 @@ def fetch_nse_symbols() -> List[str]:
 
 
 # ------------------------------------------------------------------
-# 6. MAIN STREAMLIT EXECUTION ENGINE
+# 6. SCANNER EXECUTION
 # ------------------------------------------------------------------
 symbols = fetch_nse_symbols()
 
-# App Header with Quick Refresh
 col_title, col_btn = st.columns([4, 1])
 with col_title:
     st.markdown("### ⚡ Institutional SMC & Order Flow Radar")
 with col_btn:
-    refresh_clicked = st.button("🔄 Scan Market", use_container_width=True)
+    if st.button("🔄 Scan Market", use_container_width=True):
+        st.cache_data.clear()
 
-status_container = st.empty()
-status_container.info(f"Loaded {len(symbols)} NSE stocks. Syncing benchmarks...")
-
-# Pre-fetch Benchmark & Leaders Performance
 unique_leaders = list(set(SECTOR_LEADER_MAP.values()))
 benchmarks_to_pull = ["^NSEI"] + unique_leaders
 leader_perf_map: Dict[str, float] = {}
@@ -310,14 +300,12 @@ try:
     bench_data = yf.download(
         benchmarks_to_pull, period="2d", interval="5m", group_by="ticker", progress=False
     )
-    # Parse Nifty
     nifty_raw = bench_data["^NSEI"] if isinstance(bench_data.columns, pd.MultiIndex) and "^NSEI" in bench_data.columns.levels[0] else bench_data
     n_bars = min(75, len(nifty_raw))
     nifty_open = float(nifty_raw["Open"].dropna().iloc[-n_bars])
     nifty_close = float(nifty_raw["Close"].dropna().iloc[-1])
     nifty_pct_chg = round(((nifty_close - nifty_open) / nifty_open) * 100, 2)
 
-    # Parse Leaders
     for l_ticker in unique_leaders:
         try:
             l_df = bench_data[l_ticker].dropna() if isinstance(bench_data.columns, pd.MultiIndex) else pd.DataFrame()
@@ -331,9 +319,6 @@ try:
 except Exception:
     pass
 
-# ------------------------------------------------------------------
-# 7. SCANNER & BATCH PROCESSING (₹300 - ₹600)
-# ------------------------------------------------------------------
 BATCH_SIZE = 100
 results = []
 ticker_list = [f"{sym}.NS" for sym in symbols]
@@ -380,7 +365,6 @@ for i in range(0, len(ticker_list), BATCH_SIZE):
 
             current_price = round(float(close[-1]), 2)
 
-            # Price Filter strictly ₹300 - ₹600
             if not (300.0 <= current_price <= 600.0):
                 continue
 
@@ -418,14 +402,12 @@ for i in range(0, len(ticker_list), BATCH_SIZE):
 
             smc_result = run_smc_state_machine(high, low, close, vol, atr, rsi, ema13)
 
-            # Intermarket Leader Data
             leader_ticker = SECTOR_LEADER_MAP.get(sym, None)
             leader_chg = leader_perf_map.get(leader_ticker, nifty_pct_chg)
             market_state, intermarket_dir = evaluate_intermarket_action(
                 stock_pct_chg, leader_chg, nifty_pct_chg, current_price, vwap_val, float(open_p[-1])
             )
 
-            # High-Conviction Synergy Execution
             final_signal = "REJECT"
             if market_state not in ["SELLERS OVERTAKE", "FAKE RALLY", "FAKE DROP"]:
                 if (
@@ -469,10 +451,9 @@ for i in range(0, len(ticker_list), BATCH_SIZE):
             continue
 
 progress_bar.empty()
-status_container.empty()
 
 # ------------------------------------------------------------------
-# 8. HIGH-CONVICTION DASHBOARD DISPLAY
+# 7. HIGH-CONVICTION DASHBOARD DISPLAY (FIXED HTML RENDERING)
 # ------------------------------------------------------------------
 df_trades = pd.DataFrame(results)
 
@@ -497,73 +478,69 @@ if not df_trades.empty:
             flow_badge = "background: rgba(143, 156, 169, 0.15); color: #8F9CA9; border: 1px solid #454D5A;"
 
         bar_color = "#00E676" if row["Flow Pressure"] >= 50 else "#FF5252"
+        pms_color = "#00E676" if row["PMS"] > 0 else "#FF5252"
+        cobi_color = "#00E676" if row["COBI"] > 0 else "#FF5252"
 
-        rows_html += f"""
-        <tr style="border-bottom: 1px solid #1E222D; transition: background 0.2s;" onmouseover="this.style.background='#1A1F2C'" onmouseout="this.style.background='transparent'">
-            <td style="padding: 12px 14px; color: #8F9CA9; text-align: center; font-weight: 600;">{row['S.No']}</td>
-            <td style="padding: 12px 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 0.5px;">{row['Symbol']}</td>
-            <td style="padding: 12px 14px; text-align: right; color: #F0F3FA; font-weight: 600;">{row['LTP']}</td>
-            <td style="padding: 12px 14px; text-align: right; color: #8F9CA9;">{row['VWAP']}</td>
-            <td style="padding: 12px 14px; text-align: right; font-weight: 600; color: {'#00E676' if row['PMS'] > 0 else '#FF5252'};">{row['PMS']:.4f}</td>
-            <td style="padding: 12px 14px; text-align: right; font-weight: 600; color: {'#00E676' if row['COBI'] > 0 else '#FF5252'};">{row['COBI']:.4f}</td>
-            <td style="padding: 12px 14px; text-align: center;">
-                <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
-                    <div style="flex: 1; max-width: 50px; height: 6px; background-color: #2A2E39; border-radius: 3px; overflow: hidden;">
-                        <div style="width: {row['Flow Pressure']}%; height: 100%; background: {bar_color};"></div>
-                    </div>
-                    <span style="color: #F0F3FA; font-size: 12px; font-weight: 600;">{row['Flow Pressure']}%</span>
-                </div>
-            </td>
-            <td style="padding: 12px 14px; text-align: center; color: #D1D4DC; font-weight: 600;">{row['Vol Acc']}</td>
-            <td style="padding: 12px 14px; text-align: center;">
-                <span style="padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; letter-spacing: 0.5px; display: inline-block; {flow_badge}">
-                    {row['Flow Shock']}
-                </span>
-            </td>
-            <td style="padding: 12px 14px; text-align: center; color: #388BFD; font-weight: 600; font-size: 12px;">{row['SMC Structure']}</td>
-            <td style="padding: 12px 14px; text-align: center; color: #A371F7; font-weight: 600; font-size: 12px;">{row['Market Pulse']}</td>
-            <td style="padding: 12px 14px; text-align: center;">
-                <span style="padding: 4px 14px; border-radius: 6px; font-weight: 800; font-size: 12px; letter-spacing: 0.8px; display: inline-block; {strategy_badge}">
-                    {row['Strategy']}
-                </span>
-            </td>
-        </tr>
-        """
+        rows_html += (
+            f'<tr style="border-bottom: 1px solid #1E222D;">'
+            f'<td style="padding: 12px 14px; color: #8F9CA9; text-align: center; font-weight: 600;">{row["S.No"]}</td>'
+            f'<td style="padding: 12px 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 0.5px;">{row["Symbol"]}</td>'
+            f'<td style="padding: 12px 14px; text-align: right; color: #F0F3FA; font-weight: 600;">{row["LTP"]}</td>'
+            f'<td style="padding: 12px 14px; text-align: right; color: #8F9CA9;">{row["VWAP"]}</td>'
+            f'<td style="padding: 12px 14px; text-align: right; font-weight: 600; color: {pms_color};">{row["PMS"]:.4f}</td>'
+            f'<td style="padding: 12px 14px; text-align: right; font-weight: 600; color: {cobi_color};">{row["COBI"]:.4f}</td>'
+            f'<td style="padding: 12px 14px; text-align: center;">'
+            f'<div style="display: flex; align-items: center; justify-content: center; gap: 8px;">'
+            f'<div style="flex: 1; max-width: 50px; height: 6px; background-color: #2A2E39; border-radius: 3px; overflow: hidden;">'
+            f'<div style="width: {row["Flow Pressure"]}%; height: 100%; background: {bar_color};"></div>'
+            f'</div>'
+            f'<span style="color: #F0F3FA; font-size: 12px; font-weight: 600;">{row["Flow Pressure"]}%</span>'
+            f'</div>'
+            f'</td>'
+            f'<td style="padding: 12px 14px; text-align: center; color: #D1D4DC; font-weight: 600;">{row["Vol Acc"]}</td>'
+            f'<td style="padding: 12px 14px; text-align: center;">'
+            f'<span style="padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; letter-spacing: 0.5px; display: inline-block; {flow_badge}">{row["Flow Shock"]}</span>'
+            f'</td>'
+            f'<td style="padding: 12px 14px; text-align: center; color: #388BFD; font-weight: 600; font-size: 12px;">{row["SMC Structure"]}</td>'
+            f'<td style="padding: 12px 14px; text-align: center; color: #A371F7; font-weight: 600; font-size: 12px;">{row["Market Pulse"]}</td>'
+            f'<td style="padding: 12px 14px; text-align: center;">'
+            f'<span style="padding: 4px 14px; border-radius: 6px; font-weight: 800; font-size: 12px; letter-spacing: 0.8px; display: inline-block; {strategy_badge}">{row["Strategy"]}</span>'
+            f'</td>'
+            f'</tr>'
+        )
 
-    custom_table = f"""
-    <div style="background-color: #131722; padding: 20px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #2A2E39; padding-bottom: 12px;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="display: inline-block; width: 10px; height: 10px; background: #00E676; border-radius: 50%; box-shadow: 0 0 8px #00E676;"></span>
-                <h3 style="margin: 0; color: #FFFFFF; font-size: 16px; font-weight: 700; letter-spacing: 0.5px;">INSTITUTIONAL SMC & ORDER FLOW RADAR</h3>
-            </div>
-            <span style="color: #8F9CA9; font-size: 12px;">Universe: ₹300 - ₹600 | 5-Min Timeframe | Nifty Pulse: {nifty_pct_chg}%</span>
-        </div>
-        <div style="overflow-x: auto;">
-            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
-                <thead>
-                    <tr style="border-bottom: 2px solid #2A2E39; color: #8F9CA9; text-transform: uppercase; font-size: 11px; letter-spacing: 0.8px;">
-                        <th style="padding: 10px 14px; text-align: center;">#</th>
-                        <th style="padding: 10px 14px;">Symbol</th>
-                        <th style="padding: 10px 14px; text-align: right;">LTP</th>
-                        <th style="padding: 10px 14px; text-align: right;">VWAP</th>
-                        <th style="padding: 10px 14px; text-align: right;">PMS Score</th>
-                        <th style="padding: 10px 14px; text-align: right;">COBI Flow</th>
-                        <th style="padding: 10px 14px; text-align: center;">Buy Flow</th>
-                        <th style="padding: 10px 14px; text-align: center;">Vol Acc</th>
-                        <th style="padding: 10px 14px; text-align: center;">Flow Shock</th>
-                        <th style="padding: 10px 14px; text-align: center;">SMC Structure</th>
-                        <th style="padding: 10px 14px; text-align: center;">Market Pulse</th>
-                        <th style="padding: 10px 14px; text-align: center;">Execution</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {rows_html}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    """
+    custom_table = (
+        f'<div style="background-color: #131722; padding: 20px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Helvetica, Arial, sans-serif;">'
+        f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #2A2E39; padding-bottom: 12px;">'
+        f'<div style="display: flex; align-items: center; gap: 8px;">'
+        f'<span style="display: inline-block; width: 10px; height: 10px; background: #00E676; border-radius: 50%; box-shadow: 0 0 8px #00E676;"></span>'
+        f'<h3 style="margin: 0; color: #FFFFFF; font-size: 16px; font-weight: 700; letter-spacing: 0.5px;">INSTITUTIONAL SMC & ORDER FLOW RADAR</h3>'
+        f'</div>'
+        f'<span style="color: #8F9CA9; font-size: 12px;">Universe: ₹300 - ₹600 | 5-Min Timeframe | Nifty Pulse: {nifty_pct_chg}%</span>'
+        f'</div>'
+        f'<div style="overflow-x: auto;">'
+        f'<table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">'
+        f'<thead>'
+        f'<tr style="border-bottom: 2px solid #2A2E39; color: #8F9CA9; text-transform: uppercase; font-size: 11px; letter-spacing: 0.8px;">'
+        f'<th style="padding: 10px 14px; text-align: center;">#</th>'
+        f'<th style="padding: 10px 14px;">Symbol</th>'
+        f'<th style="padding: 10px 14px; text-align: right;">LTP</th>'
+        f'<th style="padding: 10px 14px; text-align: right;">VWAP</th>'
+        f'<th style="padding: 10px 14px; text-align: right;">PMS Score</th>'
+        f'<th style="padding: 10px 14px; text-align: right;">COBI Flow</th>'
+        f'<th style="padding: 10px 14px; text-align: center;">Buy Flow</th>'
+        f'<th style="padding: 10px 14px; text-align: center;">Vol Acc</th>'
+        f'<th style="padding: 10px 14px; text-align: center;">Flow Shock</th>'
+        f'<th style="padding: 10px 14px; text-align: center;">SMC Structure</th>'
+        f'<th style="padding: 10px 14px; text-align: center;">Market Pulse</th>'
+        f'<th style="padding: 10px 14px; text-align: center;">Execution</th>'
+        f'</tr>'
+        f'</thead>'
+        f'<tbody>{rows_html}</tbody>'
+        f'</table>'
+        f'</div>'
+        f'</div>'
+    )
     st.markdown(custom_table, unsafe_allow_html=True)
 else:
     st.warning("⚠️ No high-conviction setups detected across SMC + Flow filters. Market is consolidating.")
