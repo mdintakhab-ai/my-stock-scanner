@@ -12,12 +12,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 import yfinance as yf
 
-# Suppress all deprecation and runtime warnings
+# Suppress all notebook deprecation and runtime warnings
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"] = "ignore"
 
 # ------------------------------------------------------------------
-# STREAMLIT MOBILE & LANDSCAPE ULTRA-FIT CONFIGURATION
+# STREAMLIT MOBILE & LANDSCAPE FULL-FIT CONFIGURATION
 # ------------------------------------------------------------------
 st.set_page_config(
     page_title="Institutional SMC & Order Flow Radar",
@@ -26,36 +26,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Viewport & Mobile Auto-Fit Zoom CSS
+# Custom CSS for Fullscreen Mobile Optimization and Zero Margins
 st.markdown(
     """
-    <head>
-        <meta name="viewport" content="width=device-width, initial-scale=0.85, minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes">
-    </head>
     <style>
-        /* Remove default Streamlit top/bottom margins to fit screen */
         .block-container {
-            padding-top: 0.5rem !important;
-            padding-bottom: 0.5rem !important;
-            padding-left: 0.4rem !important;
-            padding-right: 0.4rem !important;
+            padding-top: 0rem !important;
+            padding-bottom: 0rem !important;
+            padding-left: 0.1rem !important;
+            padding-right: 0.1rem !important;
             max-width: 100% !important;
         }
-        header, footer {visibility: hidden !important;}
-        #MainMenu {visibility: hidden !important;}
-        
-        /* Enable smooth horizontal scrolling and full pinch-to-zoom */
-        .radar-container {
-            width: 100% !important;
-            overflow-x: auto !important;
-            -webkit-overflow-scrolling: touch !important;
+        header, footer, #MainMenu {
+            visibility: hidden !important;
+            height: 0px !important;
         }
-        
-        /* Optimize font rendering on mobile screens */
-        table {
-            border-spacing: 0 !important;
-            font-feature-settings: "tnum" !important;
-            font-variant-numeric: tabular-nums !important;
+        iframe {
+            border: none !important;
+            width: 100% !important;
         }
     </style>
     """,
@@ -304,7 +292,7 @@ symbols = fetch_nse_symbols()
 ticker_list = [f"{sym}.NS" for sym in symbols]
 
 # ------------------------------------------------------------------
-# 6. LIVE SCANNER ENGINE (STREAMLIT CONTINUOUS RUNNER)
+# 6. LIVE SCANNER ENGINE & STREAMLIT HTML COMPONENT
 # ------------------------------------------------------------------
 REFRESH_SECONDS = 30
 main_placeholder = st.empty()
@@ -485,7 +473,7 @@ while True:
                 continue
 
     # ------------------------------------------------------------------
-    # 7. ULTRA-COMPACT PROFESSIONAL RADAR UI
+    # 7. PROFESSIONAL RADAR UI COMPONENT (ERROR-FREE HTML EMBED)
     # ------------------------------------------------------------------
     current_time = pd.Timestamp.now(tz="Asia/Kolkata").strftime("%H:%M:%S")
     df_trades = pd.DataFrame(results)
@@ -497,14 +485,12 @@ while True:
             for i, row in enumerate(df_trades.to_dict(orient="records"), 1):
                 is_buy = row["Strategy"] == "BUY"
                 
-                # Action Badge Styling
                 strat_badge = (
                     "background: rgba(0, 230, 118, 0.15); color: #00E676; border: 1px solid #00E676;"
                     if is_buy
                     else "background: rgba(255, 82, 82, 0.15); color: #FF5252; border: 1px solid #FF5252;"
                 )
 
-                # Flow Shock Badge Styling
                 if row["Flow Shock"] == "DEMAND SURGE":
                     flow_badge = "background: rgba(0, 230, 118, 0.12); color: #00E676; border: 1px solid rgba(0, 230, 118, 0.4);"
                 elif row["Flow Shock"] == "SUPPLY SURGE":
@@ -549,17 +535,49 @@ while True:
                 </tr>
                 """
 
-            custom_table = f"""
-            <div class="radar-container" style="background-color: #0E1118; padding: 10px 12px; border-radius: 8px; border: 1px solid #1E222D; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #1E222D; padding-bottom: 8px;">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span style="display: inline-block; width: 8px; height: 8px; background: #00E676; border-radius: 50%; box-shadow: 0 0 6px #00E676;"></span>
-                        <h3 style="margin: 0; color: #FFFFFF; font-size: 13.5px; font-weight: 700; letter-spacing: 0.4px;">INSTITUTIONAL SMC & ORDER FLOW RADAR</h3>
+            complete_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=0.8, minimum-scale=0.3, maximum-scale=3.0, user-scalable=yes">
+                <style>
+                    body {{
+                        margin: 0;
+                        padding: 0;
+                        background-color: #0E1118;
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+                        color: #FFFFFF;
+                        -webkit-user-select: auto;
+                        touch-action: pan-x pan-y pinch-zoom;
+                    }}
+                    .container {{
+                        background-color: #0E1118;
+                        padding: 8px 10px;
+                        border-radius: 8px;
+                        border: 1px solid #1E222D;
+                        overflow-x: auto;
+                        -webkit-overflow-scrolling: touch;
+                    }}
+                    table {{
+                        width: 100%;
+                        border-collapse: collapse;
+                        font-size: 11.5px;
+                        line-height: 1.2;
+                        font-variant-numeric: tabular-nums;
+                    }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; border-bottom: 1px solid #1E222D; padding-bottom: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="display: inline-block; width: 8px; height: 8px; background: #00E676; border-radius: 50%; box-shadow: 0 0 6px #00E676;"></span>
+                            <h3 style="margin: 0; color: #FFFFFF; font-size: 13.5px; font-weight: 700; letter-spacing: 0.4px;">INSTITUTIONAL SMC & ORDER FLOW RADAR</h3>
+                        </div>
+                        <span style="color: #00E676; font-size: 11.5px; font-weight: 600;">● LIVE ({current_time} IST) &nbsp;|&nbsp; <span style="color: #788293;">Nifty: {nifty_pct_chg}% &nbsp;|&nbsp; ₹300-₹600</span></span>
                     </div>
-                    <span style="color: #00E676; font-size: 11.5px; font-weight: 600;">● LIVE ({current_time} IST) &nbsp;|&nbsp; <span style="color: #788293;">Nifty: {nifty_pct_chg}% &nbsp;|&nbsp; ₹300-₹600</span></span>
-                </div>
-                <div style="overflow-x: auto; -webkit-overflow-scrolling: touch;">
-                    <table style="width: 100%; border-collapse: collapse; font-size: 11.5px; line-height: 1.2;">
+                    <table style="width: 100%; border-collapse: collapse;">
                         <thead>
                             <tr style="border-bottom: 1.5px solid #232733; color: #6C7688; text-transform: uppercase; font-size: 9.5px; letter-spacing: 0.6px;">
                                 <th style="padding: 6px 8px; text-align: center; white-space: nowrap;">#</th>
@@ -584,17 +602,21 @@ while True:
                         </tbody>
                     </table>
                 </div>
-            </div>
+            </body>
+            </html>
             """
-            st.markdown(custom_table, unsafe_allow_html=True)
+            components.html(complete_html, height=750, scrolling=True)
         else:
-            st.markdown(
-                f"""
-                <div style="background-color: #0E1118; padding: 16px; border-radius: 8px; border: 1px solid #1E222D; color: #8F9CA9; font-size: 13px; font-family: sans-serif;">
+            empty_html = f"""
+            <!DOCTYPE html>
+            <html>
+            <body style="background-color: #0E1118; margin: 0; padding: 12px; font-family: sans-serif; color: #8F9CA9; font-size: 13px;">
+                <div style="border: 1px solid #1E222D; padding: 14px; border-radius: 8px;">
                     [{current_time} IST] 🔍 Market scanning ₹300-₹600 universe... No clean setups right now.
                 </div>
-                """,
-                unsafe_allow_html=True
-            )
+            </body>
+            </html>
+            """
+            components.html(empty_html, height=120)
 
     time.sleep(REFRESH_SECONDS)
