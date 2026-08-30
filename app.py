@@ -1,27 +1,25 @@
 import io
-import logging
-import os
-import sys
-import time
-import urllib.request
 import warnings
-
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
+import requests
 import streamlit as st
-from tabulate import tabulate
 import yfinance as yf
 
 warnings.filterwarnings("ignore")
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-# Streamlit Mobile Page Setup
+# ------------------------------------------------------------------
+# STREAMLIT MOBILE-FIRST APP CONFIG
+# ------------------------------------------------------------------
 st.set_page_config(
-    page_title="SMC Quantitative Scanner",
-    page_icon="📊",
+    page_title="Institutional SMC & Order Flow Radar",
+    page_icon="⚡",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
+# Custom Responsive CSS for Mobile Screens & Full-width table display
 st.markdown(
     """
     <style>
@@ -31,609 +29,541 @@ st.markdown(
         padding-left: 0.5rem;
         padding-right: 0.5rem;
     }
-    .stDataFrame {
-        width: 100% !important;
-    }
+    header {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# =====================================================================
-# 1. CORE MATHEMATICAL & TECHNICAL INDICATORS
-# =====================================================================
+# ------------------------------------------------------------------
+# 1. MATHEMATICAL & TECHNICAL CALCULATORS
+# ------------------------------------------------------------------
 def clamp(value: float, min_val: float = -1.0, max_val: float = 1.0) -> float:
-    if np.isnan(value):
+    if np.isnan(value) or np.isinf(value):
         return 0.0
     return max(min_val, min(float(value), max_val))
 
 
-def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    high_low = df["High"] - df["Low"]
-    high_close = (df["High"] - df["Close"].shift(1)).abs()
-    low_close = (df["Low"] - df["Close"].shift(1)).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    return tr.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+def calculate_ema(series: np.ndarray, length: int) -> np.ndarray:
+    return pd.Series(series).ewm(span=length, adjust=False).mean().values
 
 
-def calculate_rsi(series: pd.Series, period: int = 14) -> pd.Series:
-    delta = series.diff()
-    gain = delta.clip(lower=0.0)
-    loss = -delta.clip(upper=0.0)
-    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / (avg_loss + 1e-9)
-    return (100.0 - (100.0 / (1.0 + rs))).fillna(50.0)
+def calculate_atr(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, length: int = 14
+) -> np.ndarray:
+    tr1 = high - low
+    prev_close = np.roll(close, 1)
+    prev_close[0] = close[0]
+    tr2 = np.abs(high - prev_close)
+    tr3 = np.abs(low - prev_close)
+    tr = np.maximum(tr1, np.maximum(tr2, tr3))
+    return pd.Series(tr).rolling(length, min_periods=1).mean().values
 
 
-def calculate_intraday_vwap(df: pd.DataFrame) -> pd.Series:
-    df_temp = df.copy()
-    if df_temp.index.tz is None:
-        df_temp.index = df_temp.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
+def calculate_rsi(close: np.ndarray, length: int = 14) -> np.ndarray:
+    delta = pd.Series(close).diff()
+    gain = (delta.where(delta > 0, 0.0)).rolling(length, min_periods=1).mean()
+    loss = (-delta.where(delta < 0, 0.0)).rolling(length, min_periods=1).mean()
+    rs = gain / (loss + 1e-9)
+    rsi = 100.0 - (100.0 / (1.0 + rs))
+    return np.nan_to_num(rsi.values, nan=50.0)
+
+
+def calculate_intraday_vwap(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray, volume: np.ndarray, bars: int = 75
+) -> float:
+    n = min(len(close), bars)
+    typical_price = (high[-n:] + low[-n:] + close[-n:]) / 3.0
+    vols = volume[-n:]
+    total_vol = float(np.sum(vols))
+    return (
+        round(float(np.sum(typical_price * vols) / total_vol), 2)
+        if total_vol > 0
+        else round(float(close[-1]), 2)
+    )
+
+
+def calculate_pms(
+    vol_ratio: float, order_flow_bias: float, gap_atr: float, rs_metric: float
+) -> float:
+    w1, w2, w3, w4 = 0.35, 0.30, 0.20, 0.15
+    score = (
+        (w1 * clamp(vol_ratio, -1.0, 1.0))
+        + (w2 * clamp(order_flow_bias, -1.0, 1.0))
+        + (w3 * clamp(gap_atr, -1.0, 1.0))
+        + (w4 * clamp(rs_metric, -1.0, 1.0))
+    )
+    return round(clamp(score, -1.0, 1.0), 4)
+
+
+def calculate_cobi(bid_vol: float, ask_vol: float) -> float:
+    total = bid_vol + ask_vol
+    return (
+        round(clamp((bid_vol - ask_vol) / total if total > 0 else 0.0, -1.0, 1.0), 4)
+    )
+
+
+# ------------------------------------------------------------------
+# 2. MICROSTRUCTURE FLOW & SURGE DETECTOR
+# ------------------------------------------------------------------
+def detect_flow_shock(
+    close_arr: np.ndarray, high_arr: np.ndarray, low_arr: np.ndarray, vol_arr: np.ndarray
+) -> Tuple[float, float, str, float, float]:
+    if len(close_arr) < 5:
+        return 50.0, 1.0, "NEUTRAL", 0.0, 0.0
+
+    price_range = np.maximum(high_arr - low_arr, 1e-5)
+    buy_share = (close_arr - low_arr) / price_range
+    buy_vol_arr = vol_arr * buy_share
+    sell_vol_arr = vol_arr * (1.0 - buy_share)
+
+    recent_buy = float(np.sum(buy_vol_arr[-5:]))
+    recent_total = float(np.sum(vol_arr[-5:])) + 1e-5
+    buy_pressure_pct = round((recent_buy / recent_total) * 100, 1)
+
+    denom = (
+        float(np.mean(vol_arr[-20:]))
+        if len(vol_arr) >= 20
+        else float(np.mean(vol_arr))
+    )
+    vol_acc = round(float(np.mean(vol_arr[-3:])) / (denom + 1e-5), 2)
+
+    if buy_pressure_pct >= 68.0 and vol_acc >= 1.35:
+        flow_shock = "DEMAND SURGE"
+    elif buy_pressure_pct <= 32.0 and vol_acc >= 1.35:
+        flow_shock = "SUPPLY SURGE"
     else:
-        df_temp.index = df_temp.index.tz_convert("Asia/Kolkata")
+        flow_shock = "NEUTRAL"
 
-    df_temp["Session_Date"] = df_temp.index.date
-    typical_price = (df_temp["High"] + df_temp["Low"] + df_temp["Close"]) / 3.0
-    df_temp["TP_Vol"] = typical_price * df_temp["Volume"]
+    window_10_buy = float(np.sum(buy_vol_arr[-10:]))
+    window_10_sell = float(np.sum(sell_vol_arr[-10:]))
 
-    cum_tp_vol = df_temp.groupby("Session_Date")["TP_Vol"].cumsum()
-    cum_vol = df_temp.groupby("Session_Date")["Volume"].cumsum()
-    return (cum_tp_vol / (cum_vol + 1e-9)).fillna(df_temp["Close"])
+    return buy_pressure_pct, vol_acc, flow_shock, window_10_buy, window_10_sell
 
 
-# =====================================================================
-# 2. EXACT PINE SCRIPT SMC STATE MACHINE & MATRIX ENGINE
-# =====================================================================
-def process_smc_matrix(
-    df: pd.DataFrame,
-    pivot_matrix: int = 2,
-    pivot_smc: int = 5,
-    state_life: int = 30,
-    fvg_min_atr: float = 0.1,
-    merge_thresh: float = 0.3,
-    max_tests: int = 4,
-    require_fvg: bool = False,
-) -> pd.DataFrame:
-    df = df.copy()
-    n = len(df)
-    if n < max(pivot_smc * 2 + 5, 20):
-        return df
-
-    # Ribbon EMAs & Quant Baselines (8, 13, 21)
-    df["EMA8"] = df["Close"].ewm(span=8, adjust=False).mean()
-    df["EMA13"] = df["Close"].ewm(span=13, adjust=False).mean()
-    df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
-    df["ATR"] = calculate_atr(df, 14).bfill().ffill()
-    df["RSI"] = calculate_rsi(df["Close"], 14)
-    df["VWAP"] = calculate_intraday_vwap(df)
-    df["Vol_SMA14"] = df["Volume"].rolling(14, min_periods=1).mean()
-
-    highs = df["High"].to_numpy(dtype=float)
-    lows = df["Low"].to_numpy(dtype=float)
-    closes = df["Close"].to_numpy(dtype=float)
-    opens = df["Open"].to_numpy(dtype=float)
-    vols = df["Volume"].to_numpy(dtype=float)
-    vol_sma = df["Vol_SMA14"].to_numpy(dtype=float)
-    ema13 = df["EMA13"].to_numpy(dtype=float)
-    rsi = df["RSI"].to_numpy(dtype=float)
-    atr = df["ATR"].to_numpy(dtype=float)
-
-    # 1. Volume Breakout Check
-    vol_breakout = np.zeros(n, dtype=bool)
-    for i in range(3, n):
-        highest_prev_3 = np.max(vols[i - 3 : i])
-        vol_breakout[i] = (vols[i] > (vol_sma[i] * 1.3)) and (vols[i] > highest_prev_3)
-
-    # 2. SMC State Machine Execution
-    trend_smc = np.zeros(n, dtype=int)
-    bull_state, bull_bars = 0, 0
-    bear_state, bear_bars = 0, 0
-    current_trend = 0
+# ------------------------------------------------------------------
+# 3. SMC STATE MACHINE ENGINE
+# ------------------------------------------------------------------
+def run_smc_state_machine(
+    high: np.ndarray, low: np.ndarray, close: np.ndarray,
+    vol: np.ndarray, atr: np.ndarray, rsi: np.ndarray, ema13: np.ndarray,
+    pivot_len: int = 3, state_life: int = 25, fvg_min_atr: float = 0.1
+) -> Dict[str, any]:
+    n = len(close)
+    if n < 30:
+        return {"bull_state": 0, "bear_state": 0, "smc_signal": "NONE", "status_desc": "No Pattern"}
 
     last_high, last_low = np.nan, np.nan
-    prev_high_smc, prev_low_smc = np.nan, np.nan
+    bull_state, bull_bars = 0, 0
+    bear_state, bear_bars = 0, 0
 
-    for i in range(pivot_smc * 2, n):
+    vol_sma14 = pd.Series(vol).rolling(14, min_periods=1).mean().values
+
+    for i in range(pivot_len * 2, n):
         bull_bars += 1
         bear_bars += 1
 
-        # Pine ta.pivothigh / ta.pivotlow exact window
-        p_idx = i - pivot_smc
-        win_start = p_idx - pivot_smc
-        win_end = p_idx + pivot_smc + 1
+        # Causal Pivot High & Low Detection (No forward-looking leak)
+        p_idx = i - pivot_len
+        left_highs = high[p_idx - pivot_len : p_idx]
+        right_highs = high[p_idx + 1 : i + 1]
+        if len(left_highs) > 0 and len(right_highs) > 0:
+            if high[p_idx] >= np.max(left_highs) and high[p_idx] >= np.max(right_highs):
+                last_high = high[p_idx]
 
-        if highs[p_idx] == np.max(highs[win_start:win_end]):
-            prev_high_smc = last_high
-            last_high = highs[p_idx]
+        left_lows = low[p_idx - pivot_len : p_idx]
+        right_lows = low[p_idx + 1 : i + 1]
+        if len(left_lows) > 0 and len(right_lows) > 0:
+            if low[p_idx] <= np.min(left_lows) and low[p_idx] <= np.min(right_lows):
+                last_low = low[p_idx]
 
-        if lows[p_idx] == np.min(lows[win_start:win_end]):
-            prev_low_smc = last_low
-            last_low = lows[p_idx]
+        # Sweeps, MSS & FVG Checks
+        bull_sweep = not np.isnan(last_low) and low[i] < last_low and close[i] > last_low
+        bull_mss = not np.isnan(last_high) and close[i] > last_high and close[i - 1] <= last_high
+        bull_fvg = (low[i] - high[i - 2]) > (atr[i] * fvg_min_atr) if i >= 2 else False
 
-        # Structural Check
-        bull_sweep = not np.isnan(last_low) and (lows[i] < last_low) and (closes[i] > last_low)
-        bear_sweep = not np.isnan(last_high) and (highs[i] > last_high) and (closes[i] < last_high)
+        bear_sweep = not np.isnan(last_high) and high[i] > last_high and close[i] < last_high
+        bear_mss = not np.isnan(last_low) and close[i] < last_low and close[i - 1] >= last_low
+        bear_fvg = (low[i - 2] - high[i]) > (atr[i] * fvg_min_atr) if i >= 2 else False
 
-        bull_mss = not np.isnan(last_high) and (closes[i] > last_high) and (closes[i - 1] <= last_high)
-        bear_mss = not np.isnan(last_low) and (closes[i] < last_low) and (closes[i - 1] >= last_low)
-
-        bull_bos = (
-            not np.isnan(prev_high_smc)
-            and not np.isnan(last_high)
-            and (last_high > prev_high_smc)
-            and (closes[i] > last_high)
-            and (closes[i - 1] <= last_high)
-        )
-        bear_bos = (
-            not np.isnan(prev_low_smc)
-            and not np.isnan(last_low)
-            and (last_low < prev_low_smc)
-            and (closes[i] < last_low)
-            and (closes[i - 1] >= last_low)
-        )
-
-        bull_fvg = (lows[i] > highs[i - 2]) and ((lows[i] - highs[i - 2]) > (atr[i] * fvg_min_atr))
-        bear_fvg = (highs[i] < lows[i - 2]) and ((lows[i - 2] - highs[i]) > (atr[i] * fvg_min_atr))
-
-        # State Escalation Flow (Strict Non-Skipping Order)
+        # State Transitions
         if bull_sweep:
-            bull_state = 1
-            bull_bars = 0
-        elif bull_state >= 1 and bull_mss:
-            bull_state = 2
-            bull_bars = 0
-        elif bull_state >= 2 and (bull_bos or bull_fvg):
-            bull_state = 3 if bull_bos else 4
-            bull_bars = 0
-
+            bull_state, bull_bars = 1, 0
+        if bull_state >= 1 and bull_mss:
+            bull_state, bull_bars = 2, 0
+        if bull_state >= 2 and bull_fvg:
+            bull_state, bull_bars = 4, 0
         if bull_bars > state_life:
             bull_state = 0
 
         if bear_sweep:
-            bear_state = 1
-            bear_bars = 0
-        elif bear_state >= 1 and bear_mss:
-            bear_state = 2
-            bear_bars = 0
-        elif bear_state >= 2 and (bear_bos or bear_fvg):
-            bear_state = 3 if bear_bos else 4
-            bear_bars = 0
-
+            bear_state, bear_bars = 1, 0
+        if bear_state >= 1 and bear_mss:
+            bear_state, bear_bars = 2, 0
+        if bear_state >= 2 and bear_fvg:
+            bear_state, bear_bars = 4, 0
         if bear_bars > state_life:
             bear_state = 0
 
-        ema_up = ema13[i] > ema13[i - 1]
-        ema_dn = ema13[i] < ema13[i - 1]
+    ema_up = ema13[-1] > ema13[-2]
+    ema_dn = ema13[-1] < ema13[-2]
 
-        bull_confirm = (bull_state == 4) and (closes[i] > ema13[i]) and ema_up and vol_breakout[i] and (rsi[i] > 50)
-        bear_confirm = (bear_state == 4) and (closes[i] < ema13[i]) and ema_dn and vol_breakout[i] and (rsi[i] < 50)
+    bull_confirm = (bull_state >= 2) and (close[-1] > ema13[-1]) and ema_up and (rsi[-1] >= 50.0)
+    bear_confirm = (bear_state >= 2) and (close[-1] < ema13[-1]) and ema_dn and (rsi[-1] <= 50.0)
 
-        if bull_confirm:
-            current_trend = 1
-        elif bear_confirm:
-            current_trend = -1
-        
-        # State Invalidation
-        if current_trend == 1 and (closes[i] < ema13[i] and rsi[i] < 45):
-            current_trend = 0
-        elif current_trend == -1 and (closes[i] > ema13[i] and rsi[i] > 55):
-            current_trend = 0
+    signal = "BUY" if bull_confirm else ("SELL" if bear_confirm else "NONE")
+    status_desc = "BULL MSS+FVG" if bull_state == 4 else ("BULL MSS" if bull_state == 2 else ("BEAR MSS+FVG" if bear_state == 4 else ("BEAR MSS" if bear_state == 2 else "PULLBACK")))
 
-        trend_smc[i] = current_trend
-
-    df["Trend_SMC"] = trend_smc
-
-    # 3. Demand & Supply Matrix Engine
-    has_active_demand = np.zeros(n, dtype=bool)
-    has_active_supply = np.zeros(n, dtype=bool)
-    supply_zones, demand_zones = [], []
-
-    for i in range(pivot_matrix * 2, n):
-        p_idx = i - pivot_matrix
-        w_start = p_idx - pivot_matrix
-        w_end = p_idx + pivot_matrix + 1
-
-        is_phi = highs[p_idx] == np.max(highs[w_start:w_end])
-        is_plo = lows[p_idx] == np.min(lows[w_start:w_end])
-
-        # Supply Zone Creation
-        if is_phi:
-            has_bear_fvg = not require_fvg or (
-                lows[p_idx - 1] > highs[p_idx + 1] or lows[p_idx] > highs[p_idx + 2]
-            )
-            if has_bear_fvg:
-                top_lvl = highs[p_idx]
-                bot_lvl = max(opens[p_idx], closes[p_idx])
-                is_dup = any(s["active"] and abs(s["top"] - top_lvl) < (atr[i] * merge_thresh) for s in supply_zones)
-                if not is_dup:
-                    supply_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
-
-        # Demand Zone Creation
-        if is_plo:
-            has_bull_fvg = not require_fvg or (
-                lows[p_idx + 1] > highs[p_idx - 1] or lows[p_idx + 2] > highs[p_idx]
-            )
-            if has_bull_fvg:
-                top_lvl = min(opens[p_idx], closes[p_idx])
-                bot_lvl = lows[p_idx]
-                is_dup = any(d["active"] and abs(d["bot"] - bot_lvl) < (atr[i] * merge_thresh) for d in demand_zones)
-                if not is_dup:
-                    demand_zones.append({"top": top_lvl, "bot": bot_lvl, "active": True, "tests": 0})
-
-        cur_h, cur_l = highs[i], lows[i]
-        prev_h, prev_l = highs[i - 1], lows[i - 1]
-
-        # Supply Mitigations & Invalidation
-        for s in supply_zones:
-            if s["active"]:
-                if cur_h > s["top"]:
-                    s["active"] = False
-                else:
-                    if cur_h > s["bot"] and prev_h <= s["bot"]:
-                        s["tests"] += 1
-                    if s["tests"] >= max_tests:
-                        s["active"] = False
-
-        # Demand Mitigations & Invalidation
-        for d in demand_zones:
-            if d["active"]:
-                if cur_l < d["bot"]:
-                    d["active"] = False
-                else:
-                    if cur_l < d["top"] and prev_l >= d["top"]:
-                        d["tests"] += 1
-                    if d["tests"] >= max_tests:
-                        d["active"] = False
-
-        in_supply = any(s["active"] and (cur_h >= s["bot"] and cur_l <= s["top"]) for s in supply_zones)
-        in_demand = any(d["active"] and (cur_l <= d["top"] and cur_h >= d["bot"]) for d in demand_zones)
-
-        if in_supply:
-            in_demand = False
-
-        has_active_supply[i] = in_supply
-        has_active_demand[i] = in_demand
-
-    df["Active_Demand_Box"] = has_active_demand
-    df["Active_Supply_Box"] = has_active_supply
-    return df
-
-
-# =====================================================================
-# 3. PRE-MARKET SCORE & LIVE ORDER BOOK COBI ENGINE
-# =====================================================================
-def calculate_pms(
-    pre_market_volume: float,
-    avg_pre_market_volume_10d: float,
-    total_buy_qty: float,
-    total_sell_qty: float,
-    pre_open_price: float,
-    yesterday_close: float,
-    atr_10d: float,
-    stock_pre_open_gap_pct: float = 0.0,
-    nifty_pre_open_gap_pct: float = 0.0,
-    max_call_oi_strike: float = 0.0,
-) -> float:
-    w1, w2, w3, w4, w5 = 0.30, 0.25, 0.20, 0.15, 0.10
-
-    vol_ratio = ((pre_market_volume / avg_pre_market_volume_10d) - 1.0) if avg_pre_market_volume_10d > 0 else 0.0
-    V_n = clamp(vol_ratio, -1.0, 1.0)
-
-    total_depth = total_buy_qty + total_sell_qty
-    D_n = ((total_buy_qty - total_sell_qty) / total_depth) if total_depth > 0 else 0.0
-
-    gap_points = pre_open_price - yesterday_close
-    G_n = clamp(gap_points / atr_10d, -1.0, 1.0) if atr_10d > 0 else 0.0
-
-    rs_ratio = (
-        (stock_pre_open_gap_pct / nifty_pre_open_gap_pct) - 1.0
-        if nifty_pre_open_gap_pct != 0
-        else stock_pre_open_gap_pct
-    )
-    RS_n = clamp(rs_ratio, -1.0, 1.0)
-
-    strike_distance_atr = (
-        (abs(pre_open_price - max_call_oi_strike) / atr_10d)
-        if (atr_10d > 0 and max_call_oi_strike > 0)
-        else 0.0
-    )
-    OI_n = clamp(1.0 - strike_distance_atr, 0.0, 1.0) if max_call_oi_strike > 0 else 0.0
-
-    pms_score = (w1 * V_n) + (w2 * D_n) + (w3 * G_n) + (w4 * RS_n) - (w5 * OI_n)
-    return round(pms_score, 4)
-
-
-def calculate_cobi(
-    bids: list,
-    asks: list,
-    total_bid_qty: float = None,
-    total_ask_qty: float = None,
-    weights=(0.3, 0.4, 0.3),
-) -> float:
-    w1, w2, w3 = weights
-
-    bid_prices = np.array([b[0] for b in bids], dtype=float) if bids else np.array([])
-    bid_qtys = np.array([b[1] for b in bids], dtype=float) if bids else np.array([])
-    ask_prices = np.array([a[0] for a in asks], dtype=float) if asks else np.array([])
-    ask_qtys = np.array([a[1] for a in asks], dtype=float) if asks else np.array([])
-
-    tot_b = total_bid_qty if total_bid_qty is not None else np.sum(bid_qtys)
-    tot_a = total_ask_qty if total_ask_qty is not None else np.sum(ask_qtys)
-    obir = (tot_b - tot_a) / (tot_b + tot_a) if (tot_b + tot_a) > 0 else 0.0
-
-    depth = min(len(bid_qtys), len(ask_qtys))
-    if depth > 0:
-        depth_weights = 1.0 / np.arange(1, depth + 1)
-        w_bid_sum = np.sum(bid_qtys[:depth] * depth_weights)
-        w_ask_sum = np.sum(ask_qtys[:depth] * depth_weights)
-        wob = (w_bid_sum - w_ask_sum) / (w_bid_sum + w_ask_sum) if (w_bid_sum + w_ask_sum) > 0 else 0.0
-    else:
-        wob = 0.0
-
-    if len(bid_prices) > 0 and len(ask_prices) > 0:
-        p_bid1, q_bid1 = bid_prices[0], bid_qtys[0]
-        p_ask1, q_ask1 = ask_prices[0], ask_qtys[0]
-        spread = p_ask1 - p_bid1
-        p_mid = (p_bid1 + p_ask1) / 2.0
-
-        if (q_bid1 + q_ask1) > 0 and spread > 0:
-            p_micro = (p_bid1 * q_ask1 + p_ask1 * q_bid1) / (q_bid1 + q_ask1)
-            mpdr = (p_micro - p_mid) / (spread / 2.0)
-        else:
-            mpdr = 0.0
-    else:
-        mpdr = 0.0
-
-    cobi_score = (w1 * obir) + (w2 * wob) + (w3 * mpdr)
-    return round(clamp(cobi_score, -1.0, 1.0), 4)
-
-
-def compute_live_candle_scores(df: pd.DataFrame):
-    """Fallback proxy calculation when raw L2 depth stream is unavailable."""
-    if len(df) < 11:
-        return 0.0, 0.0
-
-    last_open = float(df["Open"].iloc[-1])
-    prev_close = float(df["Close"].iloc[-2])
-    last_atr = float(df["ATR"].iloc[-1])
-    gap = (last_open - prev_close) / (last_atr + 1e-9)
-
-    last_vol = float(df["Volume"].iloc[-1])
-    avg_vol = float(df["Volume"].rolling(10, min_periods=1).mean().iloc[-1])
-    vol_ratio = (last_vol / (avg_vol + 1e-9)) - 1.0
-
-    pms = round(0.5 * clamp(gap, -1.0, 1.0) + 0.5 * clamp(vol_ratio, -1.0, 1.0), 4)
-
-    last_close = float(df["Close"].iloc[-1])
-    last_low = float(df["Low"].iloc[-1])
-    last_high = float(df["High"].iloc[-1])
-
-    vol_weight = (last_close - last_low) - (last_high - last_close)
-    denom = (last_high - last_low) + 1e-9
-    cobi_val = (vol_weight / denom) * (last_vol / (avg_vol + 1e-9))
-    cobi = round(clamp(cobi_val, -1.0, 1.0), 4)
-
-    return pms, cobi
-
-
-# =====================================================================
-# 4. DATA ENGINE & EXPANDED SYMBOLS UNIVERSE
-# =====================================================================
-def load_intraday_data(symbol: str):
-    try:
-        t = yf.Ticker(symbol)
-        df_1m = t.history(period="5d", interval="1m", auto_adjust=False)
-
-        if df_1m.empty or len(df_1m) < 30:
-            df_5m = t.history(period="5d", interval="5m", auto_adjust=False)
-            if df_5m.empty or len(df_5m) < 15:
-                return pd.DataFrame(), pd.DataFrame()
-            return df_5m, df_5m
-
-        if df_1m.index.tz is None:
-            df_1m.index = df_1m.index.tz_localize("UTC").tz_convert("Asia/Kolkata")
-        else:
-            df_1m.index = df_1m.index.tz_convert("Asia/Kolkata")
-
-        df_1m = df_1m.between_time("09:15", "15:30")
-
-        agg_dict = {
-            "Open": "first",
-            "High": "max",
-            "Low": "min",
-            "Close": "last",
-            "Volume": "sum",
-        }
-        df_3m = df_1m.resample("3min").agg(agg_dict).dropna()
-        df_5m = df_1m.resample("5min").agg(agg_dict).dropna()
-
-        df_3m = df_3m[df_3m["Volume"] > 0]
-        df_5m = df_5m[df_5m["Volume"] > 0]
-
-        return df_3m, df_5m
-    except Exception:
-        return pd.DataFrame(), pd.DataFrame()
-
-
-def get_expanded_symbols():
-    fallback = [
-        "VTL.NS", "ARVIND.NS", "ITC.NS", "VEDL.NS", "COALINDIA.NS", "NTPC.NS", "TATAPOWER.NS",
-        "BPCL.NS", "HINDPETRO.NS", "WIPRO.NS", "DABUR.NS", "BEL.NS",
-        "APOLLOTYRE.NS", "AMBUJACEM.NS", "EXIDEIND.NS", "BHEL.NS",
-        "NATIONALUM.NS", "GNFC.NS", "CHAMBLFERT.NS", "UPL.NS",
-        "AARTIIND.NS", "M&MFIN.NS", "LICHSGFIN.NS", "MANAPPURAM.NS",
-        "ABCAPITAL.NS", "BIOCON.NS", "PRECWIRE.NS",
-    ]
-    try:
-        url = "https://archives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv"
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "*/*",
-            },
-        )
-        with urllib.request.urlopen(req, timeout=5) as response:
-            csv_data = response.read()
-            df = pd.read_csv(io.BytesIO(csv_data))
-            sym_col = [c for c in df.columns if "Symbol" in c or "SYMBOL" in c]
-            if sym_col:
-                fetched = [f"{sym.strip()}.NS" for sym in df[sym_col[0]].dropna().unique()]
-                return sorted(list(set(fetched)))
-    except Exception:
-        pass
-    return sorted(list(set(fallback)))
-
-
-# =====================================================================
-# 5. UNIFIED EVALUATION & MATRIX SCREENER
-# =====================================================================
-def evaluate_symbol(symbol: str):
-    df_3m, df_5m = load_intraday_data(symbol)
-    if df_5m.empty or len(df_5m) < 15 or df_3m.empty or len(df_3m) < 15:
-        return None
-
-    df_3m_calc = process_smc_matrix(df_3m)
-    df_5m_calc = process_smc_matrix(df_5m)
-
-    ltp = round(float(df_5m_calc["Close"].iloc[-1]), 2)
-    vwap_val = round(float(df_5m_calc["VWAP"].iloc[-1]), 2)
-
-    # Strictly Filter Range ₹300 - ₹600
-    if not (300.0 <= ltp <= 600.0):
-        return None
-
-    pms_val, cobi_val = compute_live_candle_scores(df_5m_calc)
-
-    ema_3m_trend = int(df_3m_calc["Trend_SMC"].iloc[-1])
-    ema_5m_trend = int(df_5m_calc["Trend_SMC"].iloc[-1])
-
-    ema_3m_green = ema_3m_trend == 1
-    ema_3m_red = ema_3m_trend == -1
-    ema_5m_green = ema_5m_trend == 1
-    ema_5m_red = ema_5m_trend == -1
-
-    box_3m_demand = bool(df_3m_calc["Active_Demand_Box"].iloc[-1])
-    box_3m_supply = bool(df_3m_calc["Active_Supply_Box"].iloc[-1])
-    box_5m_demand = bool(df_5m_calc["Active_Demand_Box"].iloc[-1])
-    box_5m_supply = bool(df_5m_calc["Active_Supply_Box"].iloc[-1])
-
-    # Rule Validations
-    buy_3m = ema_3m_green and box_3m_demand and (ltp >= vwap_val)
-    sell_3m = ema_3m_red and box_3m_supply and (ltp <= vwap_val)
-    buy_5m = ema_5m_green and box_5m_demand and (ltp >= vwap_val)
-    sell_5m = ema_5m_red and box_5m_supply and (ltp <= vwap_val)
-
-    if buy_3m and buy_5m:
-        setup_t1 = "🔥 GRADE-A+ BUY (3M+5M)"
-    elif sell_3m and sell_5m:
-        setup_t1 = "💥 GRADE-A+ SELL (3M+5M)"
-    elif buy_5m:
-        setup_t1 = "🟢 GRADE-A BUY (5M)"
-    elif sell_5m:
-        setup_t1 = "🔴 GRADE-A SELL (5M)"
-    else:
-        setup_t1 = "⚪ WATCHLIST"
-
-    base_row = {
-        "Symbol": symbol.replace(".NS", ""),
-        "LTP (₹)": ltp,
-        "VWAP (₹)": vwap_val,
-        "EMA13 (3M)": "🟢 GREEN" if ema_3m_green else "🔴 RED" if ema_3m_red else "🟡 YELLOW",
-        "Box (3M)": "🟢 DEMAND" if box_3m_demand else "🔴 SUPPLY" if box_3m_supply else "⚪ NONE",
-        "EMA13 (5M)": "🟢 GREEN" if ema_5m_green else "🔴 RED" if ema_5m_red else "🟡 YELLOW",
-        "Box (5M)": "🟢 DEMAND" if box_5m_demand else "🔴 SUPPLY" if box_5m_supply else "⚪ NONE",
-        "PMS": pms_val,
-        "COBI": cobi_val,
+    return {
+        "bull_state": bull_state,
+        "bear_state": bear_state,
+        "smc_signal": signal,
+        "status_desc": status_desc
     }
 
-    # Strict Table 2 Condition: Multi-Timeframe Alignment + Pure Clean Zones + COBI Imbalance Edge
-    table2_buy = (
-        ema_3m_green
-        and ema_5m_green
-        and box_3m_demand
-        and box_5m_demand
-        and (not box_3m_supply)
-        and (not box_5m_supply)
-        and (ltp >= vwap_val)
-        and (cobi_val >= 0.20)
+
+# ------------------------------------------------------------------
+# 4. INTERMARKET PULSE ENGINE
+# ------------------------------------------------------------------
+SECTOR_LEADER_MAP = {
+    "TATAMOTORS": "MARUTI.NS", "M&M": "MARUTI.NS", "ASHOKLEY": "MARUTI.NS",
+    "TATASTEEL": "HINDALCO.NS", "SAIL": "HINDALCO.NS", "JINDALSTEL": "HINDALCO.NS",
+    "SBIN": "HDFCBANK.NS", "ICICIBANK": "HDFCBANK.NS", "PNB": "HDFCBANK.NS", "CANBK": "HDFCBANK.NS", "FEDERALBNK": "HDFCBANK.NS",
+    "INFY": "TCS.NS", "WIPRO": "TCS.NS", "HCLTECH": "TCS.NS", "TECHM": "TCS.NS",
+    "CIPLA": "SUNPHARMA.NS", "DRREDDY": "SUNPHARMA.NS", "LUPIN": "SUNPHARMA.NS",
+    "TATAPOWER": "RELIANCE.NS", "ONGC": "RELIANCE.NS", "BPCL": "RELIANCE.NS", "IOC": "RELIANCE.NS", "VEDL": "HINDALCO.NS"
+}
+
+def evaluate_intermarket_action(
+    stock_pct_chg: float, leader_pct_chg: float, nifty_pct_chg: float,
+    price: float, vwap_val: float, open_price: float
+) -> Tuple[str, str]:
+    stock_up = price >= vwap_val and price >= open_price
+    stock_down = price <= vwap_val and price <= open_price
+
+    if stock_up and stock_pct_chg > 1.2 and leader_pct_chg < -0.4 and nifty_pct_chg < 0.0:
+        return "SELLERS OVERTAKE", "TRAP"
+    if stock_up and stock_pct_chg > 0.8 and (leader_pct_chg < -0.2 or nifty_pct_chg < -0.15):
+        return "FAKE RALLY", "TRAP"
+    if stock_down and stock_pct_chg < -0.8 and leader_pct_chg > 0.2 and nifty_pct_chg > 0.15:
+        return "FAKE DROP", "TRAP"
+    if stock_up and leader_pct_chg >= 0.1 and nifty_pct_chg >= 0.05:
+        return "INSTITUTIONAL SYNC", "BUY"
+    if stock_down and leader_pct_chg <= -0.1 and nifty_pct_chg <= -0.05:
+        return "BEARISH ROTATION", "SELL"
+
+    return "MOMENTUM SYNC", ("BUY" if stock_up else ("SELL" if stock_down else "NEUTRAL"))
+
+
+# ------------------------------------------------------------------
+# 5. UNIVERSE FETCHER & BENCHMARK INIT
+# ------------------------------------------------------------------
+@st.cache_data(ttl=3600)
+def fetch_nse_symbols() -> List[str]:
+    urls = [
+        "https://archives.nseindia.com/content/indices/ind_niftytotalmarket_list.csv",
+        "https://archives.nseindia.com/content/indices/ind_nifty500list.csv",
+    ]
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    for url in urls:
+        try:
+            res = requests.get(url, headers=headers, timeout=6)
+            if res.status_code == 200:
+                df = pd.read_csv(io.StringIO(res.text))
+                if "Symbol" in df.columns:
+                    return df["Symbol"].dropna().unique().tolist()
+        except Exception:
+            continue
+
+    return [
+        "TATAPOWER", "VEDL", "DLF", "FEDERALBNK", "IDFCFIRSTB", "CANBK",
+        "PNB", "SAIL", "ARVINDFASN", "PATANJALI", "LICI", "NAZARA",
+        "SONATSOFTW", "APOLLO", "KEC", "THYROCARE", "EUREKAFORB", "TRITURBINE"
+    ]
+
+
+# ------------------------------------------------------------------
+# 6. MAIN STREAMLIT EXECUTION ENGINE
+# ------------------------------------------------------------------
+symbols = fetch_nse_symbols()
+
+# App Header with Quick Refresh
+col_title, col_btn = st.columns([4, 1])
+with col_title:
+    st.markdown("### ⚡ Institutional SMC & Order Flow Radar")
+with col_btn:
+    refresh_clicked = st.button("🔄 Scan Market", use_container_width=True)
+
+status_container = st.empty()
+status_container.info(f"Loaded {len(symbols)} NSE stocks. Syncing benchmarks...")
+
+# Pre-fetch Benchmark & Leaders Performance
+unique_leaders = list(set(SECTOR_LEADER_MAP.values()))
+benchmarks_to_pull = ["^NSEI"] + unique_leaders
+leader_perf_map: Dict[str, float] = {}
+nifty_pct_chg = 0.0
+
+try:
+    bench_data = yf.download(
+        benchmarks_to_pull, period="2d", interval="5m", group_by="ticker", progress=False
     )
+    # Parse Nifty
+    nifty_raw = bench_data["^NSEI"] if isinstance(bench_data.columns, pd.MultiIndex) and "^NSEI" in bench_data.columns.levels[0] else bench_data
+    n_bars = min(75, len(nifty_raw))
+    nifty_open = float(nifty_raw["Open"].dropna().iloc[-n_bars])
+    nifty_close = float(nifty_raw["Close"].dropna().iloc[-1])
+    nifty_pct_chg = round(((nifty_close - nifty_open) / nifty_open) * 100, 2)
 
-    table2_sell = (
-        ema_3m_red
-        and ema_5m_red
-        and box_3m_supply
-        and box_5m_supply
-        and (not box_3m_demand)
-        and (not box_5m_demand)
-        and (ltp <= vwap_val)
-        and (cobi_val <= -0.20)
-    )
+    # Parse Leaders
+    for l_ticker in unique_leaders:
+        try:
+            l_df = bench_data[l_ticker].dropna() if isinstance(bench_data.columns, pd.MultiIndex) else pd.DataFrame()
+            if not l_df.empty:
+                l_bars = min(75, len(l_df))
+                l_open = float(l_df["Open"].iloc[-l_bars])
+                l_close = float(l_df["Close"].iloc[-1])
+                leader_perf_map[l_ticker] = round(((l_close - l_open) / l_open) * 100, 2)
+        except Exception:
+            leader_perf_map[l_ticker] = nifty_pct_chg
+except Exception:
+    pass
 
-    if table2_buy:
-        row_t2 = base_row.copy()
-        row_t2["Signal Setup"] = "🟢 BUY (INSTITUTIONAL)"
-        return ("T2", row_t2)
-    elif table2_sell:
-        row_t2 = base_row.copy()
-        row_t2["Signal Setup"] = "🔴 SELL (INSTITUTIONAL)"
-        return ("T2", row_t2)
-    else:
-        row_t1 = base_row.copy()
-        row_t1["Signal Setup"] = setup_t1
-        return ("T1", row_t1)
+# ------------------------------------------------------------------
+# 7. SCANNER & BATCH PROCESSING (₹300 - ₹600)
+# ------------------------------------------------------------------
+BATCH_SIZE = 100
+results = []
+ticker_list = [f"{sym}.NS" for sym in symbols]
 
+progress_bar = st.progress(0)
 
-# =====================================================================
-# 6. RUN EXECUTION ENGINE
-# =====================================================================
-def run_screener():
-    table1_rows, table2_rows = [], []
-    symbols = get_expanded_symbols()
-    
-    st.markdown("### 📊 SMC & Trinity Quantitative Screener")
-    st.caption("Live 3M/5M SMC Matrix Engine • Filter Range: ₹300 - ₹600")
+for i in range(0, len(ticker_list), BATCH_SIZE):
+    progress_bar.progress(min((i + BATCH_SIZE) / len(ticker_list), 1.0))
+    batch_tickers = ticker_list[i : i + BATCH_SIZE]
+    batch_symbols = symbols[i : i + BATCH_SIZE]
 
-    progress_bar = st.progress(0, text="Initializing Market Scanner...")
-    total = len(symbols)
+    try:
+        data = yf.download(
+            tickers=batch_tickers,
+            period="5d",
+            interval="5m",
+            group_by="ticker",
+            threads=True,
+            progress=False,
+        )
+    except Exception:
+        continue
 
-    for idx, sym in enumerate(symbols):
-        progress_bar.progress((idx + 1) / total, text=f"Scanning {sym} ({idx+1}/{total})...")
-        res = evaluate_symbol(sym)
-        if res is not None:
-            t_type, row_data = res
-            if t_type == "T2":
-                table2_rows.append(row_data)
+    for sym, ticker in zip(batch_symbols, batch_tickers):
+        try:
+            if isinstance(data.columns, pd.MultiIndex):
+                if ticker in data.columns.levels[0]:
+                    df = data[ticker].dropna()
+                elif len(data.columns.levels) > 1 and ticker in data.columns.levels[1]:
+                    df = data.xs(ticker, axis=1, level=1).dropna()
+                else:
+                    continue
             else:
-                table1_rows.append(row_data)
+                df = data.dropna()
 
-    progress_bar.empty()
+            if df.empty or len(df) < 35:
+                continue
 
-    if table1_rows:
-        table1_rows.sort(key=lambda x: x["Symbol"])
-    if table2_rows:
-        table2_rows.sort(key=lambda x: x["Symbol"])
+            close = df["Close"].values.astype(float)
+            open_p = df["Open"].values.astype(float)
+            high = df["High"].values.astype(float)
+            low = df["Low"].values.astype(float)
+            vol = df["Volume"].values.astype(float)
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Scanned", f"{total}")
-    col2.metric("Table 1 Signals", f"{len(table1_rows)}")
-    col3.metric("Table 2 Trinity", f"{len(table2_rows)}")
+            current_price = round(float(close[-1]), 2)
 
-    st.markdown("#### 💎 TABLE 2: 100% PERFECT TRINITY ALIGNED TRADES")
-    if table2_rows:
-        st.dataframe(pd.DataFrame(table2_rows), use_container_width=True, hide_index=True)
-    else:
-        st.info("⚠️ No strictly aligned trades available for Table 2 right now.")
+            # Price Filter strictly ₹300 - ₹600
+            if not (300.0 <= current_price <= 600.0):
+                continue
 
-    st.markdown("---")
+            vwap_val = calculate_intraday_vwap(high, low, close, vol)
+            ema13 = calculate_ema(close, 13)
+            atr = calculate_atr(high, low, close, 14)
+            rsi = calculate_rsi(close, 14)
+            atr_val = round(float(atr[-1]), 2) if atr[-1] > 0 else 1.0
 
-    st.markdown("#### 📋 TABLE 1: QUANTITATIVE WATCHLIST & GRADE-A TRADES")
-    if table1_rows:
-        st.dataframe(pd.DataFrame(table1_rows), use_container_width=True, hide_index=True)
-    else:
-        st.warning("No stocks matched Table 1 criteria.")
+            bars_today = min(len(close), 75)
+            session_open = float(open_p[-bars_today])
+            prev_ref = float(close[-bars_today]) if len(close) >= bars_today else float(close[0])
+            gap_pts = current_price - prev_ref
+            stock_pct_chg = round(((current_price - session_open) / session_open) * 100, 2)
 
+            (
+                buy_pressure_pct,
+                vol_acc,
+                flow_shock,
+                buy_vol_10,
+                sell_vol_10,
+            ) = detect_flow_shock(close, high, low, vol)
 
-if __name__ == "__main__":
-    run_screener()
+            recent_vol = float(np.sum(vol[-10:]))
+            avg_vol = float(np.mean(vol[-bars_today:])) * 10 if len(vol) >= bars_today else float(np.mean(vol)) * 10
+            vol_ratio = (recent_vol / avg_vol) - 1.0 if avg_vol > 0 else 0.0
+
+            cobi_val = calculate_cobi(buy_vol_10, sell_vol_10)
+            pms_val = calculate_pms(
+                vol_ratio,
+                cobi_val,
+                gap_pts / atr_val,
+                (gap_pts / prev_ref) * 10 if prev_ref > 0 else 0.0,
+            )
+
+            smc_result = run_smc_state_machine(high, low, close, vol, atr, rsi, ema13)
+
+            # Intermarket Leader Data
+            leader_ticker = SECTOR_LEADER_MAP.get(sym, None)
+            leader_chg = leader_perf_map.get(leader_ticker, nifty_pct_chg)
+            market_state, intermarket_dir = evaluate_intermarket_action(
+                stock_pct_chg, leader_chg, nifty_pct_chg, current_price, vwap_val, float(open_p[-1])
+            )
+
+            # High-Conviction Synergy Execution
+            final_signal = "REJECT"
+            if market_state not in ["SELLERS OVERTAKE", "FAKE RALLY", "FAKE DROP"]:
+                if (
+                    pms_val >= 0.28
+                    and cobi_val >= 0.25
+                    and current_price >= vwap_val
+                    and buy_pressure_pct >= 58.0
+                    and vol_acc >= 1.12
+                    and (smc_result["smc_signal"] == "BUY" or rsi[-1] >= 50.0)
+                    and intermarket_dir in ["BUY", "NEUTRAL"]
+                ):
+                    final_signal = "BUY"
+                elif (
+                    pms_val <= -0.28
+                    and cobi_val <= -0.25
+                    and current_price <= vwap_val
+                    and buy_pressure_pct <= 42.0
+                    and vol_acc >= 1.12
+                    and (smc_result["smc_signal"] == "SELL" or rsi[-1] <= 50.0)
+                    and intermarket_dir in ["SELL", "NEUTRAL"]
+                ):
+                    final_signal = "SELL"
+
+            if final_signal in ["BUY", "SELL"]:
+                results.append(
+                    {
+                        "Symbol": sym,
+                        "LTP": f"₹{current_price:,.2f}",
+                        "VWAP": f"₹{vwap_val:,.2f}",
+                        "PMS": pms_val,
+                        "COBI": cobi_val,
+                        "Flow Pressure": buy_pressure_pct,
+                        "Vol Acc": f"{vol_acc}x",
+                        "Flow Shock": flow_shock,
+                        "SMC Structure": smc_result["status_desc"],
+                        "Market Pulse": market_state,
+                        "Strategy": final_signal,
+                    }
+                )
+        except Exception:
+            continue
+
+progress_bar.empty()
+status_container.empty()
+
+# ------------------------------------------------------------------
+# 8. HIGH-CONVICTION DASHBOARD DISPLAY
+# ------------------------------------------------------------------
+df_trades = pd.DataFrame(results)
+
+if not df_trades.empty:
+    df_trades = df_trades.sort_values(by=["PMS", "COBI"], ascending=False)
+    df_trades.insert(0, "S.No", np.arange(1, len(df_trades) + 1))
+
+    rows_html = ""
+    for _, row in df_trades.iterrows():
+        is_buy = row["Strategy"] == "BUY"
+        strategy_badge = (
+            "background: linear-gradient(135deg, #00B074 0%, #008f5d 100%); color: #ffffff; box-shadow: 0 0 10px rgba(0, 176, 116, 0.4);"
+            if is_buy
+            else "background: linear-gradient(135deg, #FF3B30 0%, #c41e15 100%); color: #ffffff; box-shadow: 0 0 10px rgba(255, 59, 48, 0.4);"
+        )
+
+        if row["Flow Shock"] == "DEMAND SURGE":
+            flow_badge = "background: rgba(0, 230, 118, 0.15); color: #00E676; border: 1px solid #00E676;"
+        elif row["Flow Shock"] == "SUPPLY SURGE":
+            flow_badge = "background: rgba(255, 82, 82, 0.15); color: #FF5252; border: 1px solid #FF5252;"
+        else:
+            flow_badge = "background: rgba(143, 156, 169, 0.15); color: #8F9CA9; border: 1px solid #454D5A;"
+
+        bar_color = "#00E676" if row["Flow Pressure"] >= 50 else "#FF5252"
+
+        rows_html += f"""
+        <tr style="border-bottom: 1px solid #1E222D; transition: background 0.2s;" onmouseover="this.style.background='#1A1F2C'" onmouseout="this.style.background='transparent'">
+            <td style="padding: 12px 14px; color: #8F9CA9; text-align: center; font-weight: 600;">{row['S.No']}</td>
+            <td style="padding: 12px 14px; font-weight: 700; color: #FFFFFF; letter-spacing: 0.5px;">{row['Symbol']}</td>
+            <td style="padding: 12px 14px; text-align: right; color: #F0F3FA; font-weight: 600;">{row['LTP']}</td>
+            <td style="padding: 12px 14px; text-align: right; color: #8F9CA9;">{row['VWAP']}</td>
+            <td style="padding: 12px 14px; text-align: right; font-weight: 600; color: {'#00E676' if row['PMS'] > 0 else '#FF5252'};">{row['PMS']:.4f}</td>
+            <td style="padding: 12px 14px; text-align: right; font-weight: 600; color: {'#00E676' if row['COBI'] > 0 else '#FF5252'};">{row['COBI']:.4f}</td>
+            <td style="padding: 12px 14px; text-align: center;">
+                <div style="display: flex; align-items: center; justify-content: center; gap: 8px;">
+                    <div style="flex: 1; max-width: 50px; height: 6px; background-color: #2A2E39; border-radius: 3px; overflow: hidden;">
+                        <div style="width: {row['Flow Pressure']}%; height: 100%; background: {bar_color};"></div>
+                    </div>
+                    <span style="color: #F0F3FA; font-size: 12px; font-weight: 600;">{row['Flow Pressure']}%</span>
+                </div>
+            </td>
+            <td style="padding: 12px 14px; text-align: center; color: #D1D4DC; font-weight: 600;">{row['Vol Acc']}</td>
+            <td style="padding: 12px 14px; text-align: center;">
+                <span style="padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 11px; letter-spacing: 0.5px; display: inline-block; {flow_badge}">
+                    {row['Flow Shock']}
+                </span>
+            </td>
+            <td style="padding: 12px 14px; text-align: center; color: #388BFD; font-weight: 600; font-size: 12px;">{row['SMC Structure']}</td>
+            <td style="padding: 12px 14px; text-align: center; color: #A371F7; font-weight: 600; font-size: 12px;">{row['Market Pulse']}</td>
+            <td style="padding: 12px 14px; text-align: center;">
+                <span style="padding: 4px 14px; border-radius: 6px; font-weight: 800; font-size: 12px; letter-spacing: 0.8px; display: inline-block; {strategy_badge}">
+                    {row['Strategy']}
+                </span>
+            </td>
+        </tr>
+        """
+
+    custom_table = f"""
+    <div style="background-color: #131722; padding: 20px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; border-bottom: 1px solid #2A2E39; padding-bottom: 12px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="display: inline-block; width: 10px; height: 10px; background: #00E676; border-radius: 50%; box-shadow: 0 0 8px #00E676;"></span>
+                <h3 style="margin: 0; color: #FFFFFF; font-size: 16px; font-weight: 700; letter-spacing: 0.5px;">INSTITUTIONAL SMC & ORDER FLOW RADAR</h3>
+            </div>
+            <span style="color: #8F9CA9; font-size: 12px;">Universe: ₹300 - ₹600 | 5-Min Timeframe | Nifty Pulse: {nifty_pct_chg}%</span>
+        </div>
+        <div style="overflow-x: auto;">
+            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
+                <thead>
+                    <tr style="border-bottom: 2px solid #2A2E39; color: #8F9CA9; text-transform: uppercase; font-size: 11px; letter-spacing: 0.8px;">
+                        <th style="padding: 10px 14px; text-align: center;">#</th>
+                        <th style="padding: 10px 14px;">Symbol</th>
+                        <th style="padding: 10px 14px; text-align: right;">LTP</th>
+                        <th style="padding: 10px 14px; text-align: right;">VWAP</th>
+                        <th style="padding: 10px 14px; text-align: right;">PMS Score</th>
+                        <th style="padding: 10px 14px; text-align: right;">COBI Flow</th>
+                        <th style="padding: 10px 14px; text-align: center;">Buy Flow</th>
+                        <th style="padding: 10px 14px; text-align: center;">Vol Acc</th>
+                        <th style="padding: 10px 14px; text-align: center;">Flow Shock</th>
+                        <th style="padding: 10px 14px; text-align: center;">SMC Structure</th>
+                        <th style="padding: 10px 14px; text-align: center;">Market Pulse</th>
+                        <th style="padding: 10px 14px; text-align: center;">Execution</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    """
+    st.markdown(custom_table, unsafe_allow_html=True)
+else:
+    st.warning("⚠️ No high-conviction setups detected across SMC + Flow filters. Market is consolidating.")
