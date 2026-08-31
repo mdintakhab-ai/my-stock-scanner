@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 import yfinance as yf
 
 warnings.filterwarnings("ignore")
@@ -225,93 +226,6 @@ def get_scanner_data():
     return df, nifty_change
 
 
-# CSS for Mobile Responsive UI and Freeze Columns
-st.markdown(
-    """
-    <style>
-        .block-container {
-            padding-top: 1rem;
-            padding-bottom: 0rem;
-            padding-left: 0.5rem;
-            padding-right: 0.5rem;
-        }
-        .scanner-wrapper {
-            background-color: #0d1117;
-            color: #c9d1d9;
-            font-family: 'Segoe UI', monospace;
-            padding: 12px;
-            border-radius: 8px;
-            border: 1px solid #30363d;
-            width: 100%;
-            box-sizing: border-box;
-        }
-        .table-responsive {
-            width: 100%;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            position: relative;
-        }
-        .scanner-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            text-align: right;
-            font-size: 12px;
-            white-space: nowrap;
-        }
-        .scanner-table th, .scanner-table td {
-            padding: 6px 8px;
-            border-bottom: 1px solid #21262d;
-            background-color: #0d1117;
-        }
-        .scanner-table th {
-            color: #8b949e;
-            border-bottom: 1px solid #30363d;
-            height: 32px;
-        }
-        
-        .col-sticky-1 {
-            position: sticky;
-            left: 0px;
-            z-index: 2;
-            width: 30px;
-            min-width: 30px;
-            text-align: center !important;
-            border-right: 1px solid #21262d;
-        }
-        .col-sticky-2 {
-            position: sticky;
-            left: 30px;
-            z-index: 2;
-            min-width: 90px;
-            text-align: left !important;
-            font-weight: bold;
-        }
-        .col-sticky-3 {
-            position: sticky;
-            left: 120px;
-            z-index: 2;
-            min-width: 75px;
-            font-weight: bold;
-            color: #ffffff !important;
-        }
-        .col-sticky-4 {
-            position: sticky;
-            left: 195px;
-            z-index: 2;
-            min-width: 75px;
-            border-right: 2px solid #30363d;
-            color: #8b949e !important;
-        }
-
-        .priority-row td {
-            background-color: #161b22 !important;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
 placeholder = st.empty()
 
 while True:
@@ -319,7 +233,7 @@ while True:
     current_time = datetime.datetime.now().strftime("%H:%M:%S") + " IST"
 
     if df.empty:
-        table_rows = "<tr><td colspan='12' style='text-align:center; padding: 20px; color: #8b949e;'>Fetching Market Data...</td></tr>"
+        table_rows = "<tr><td colspan='12' style='text-align:center; padding: 25px; color: #8b949e;'>Fetching Realtime Market Data...</td></tr>"
         stock_count = 0
     else:
         stock_count = len(df)
@@ -335,7 +249,7 @@ while True:
                 f"""
                 <tr class="{row_class}">
                     <td class="col-sticky-1" style="color: #8b949e;">{row['#']}</td>
-                    <td class="col-sticky-2" style="color: #ffffff;">{row['SYMBOL']}</td>
+                    <td class="col-sticky-2">{row['SYMBOL']}</td>
                     <td class="col-sticky-3">{row['LTP']}</td>
                     <td class="col-sticky-4">{row['VWAP']}</td>
                     <td style="color: {delta_color}; font-weight: bold;">{delta_str}</td>
@@ -351,43 +265,152 @@ while True:
             )
         table_rows = "".join(rows_list)
 
-    html_code = f"""
-    <div class="scanner-wrapper">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #21262d; padding-bottom: 8px; margin-bottom: 8px;">
-            <div style="font-weight: bold; font-size: 13px; color: #00e676;">
-                ● LIGHTSPEED QUANT | <span style="color: #ffffff;">{current_time}</span>
+    full_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{
+            margin: 0;
+            padding: 4px;
+            background-color: #0E1117;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #c9d1d9;
+        }}
+        .scanner-wrapper {{
+            background-color: #0d1117;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            box-sizing: border-box;
+            width: 100%;
+        }}
+        .header-bar {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #21262d;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
+        }}
+        .table-responsive {{
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+            border-radius: 6px;
+        }}
+        .scanner-table {{
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            text-align: right;
+            font-size: 12px;
+            white-space: nowrap;
+            background-color: #0d1117;
+        }}
+        .scanner-table th, .scanner-table td {{
+            padding: 7px 8px;
+            border-bottom: 1px solid #21262d;
+            background-color: #0d1117;
+        }}
+        .scanner-table th {{
+            color: #8b949e;
+            border-bottom: 2px solid #30363d;
+            height: 30px;
+            font-size: 11px;
+            text-transform: uppercase;
+        }}
+        
+        /* Sticky Freeze Columns for Mobile Horizontal Scroll */
+        .col-sticky-1 {{
+            position: sticky;
+            left: 0px;
+            z-index: 2;
+            width: 28px;
+            min-width: 28px;
+            text-align: center !important;
+            border-right: 1px solid #21262d;
+        }}
+        .col-sticky-2 {{
+            position: sticky;
+            left: 28px;
+            z-index: 2;
+            min-width: 95px;
+            text-align: left !important;
+            font-weight: bold;
+            color: #ffffff !important;
+        }}
+        .col-sticky-3 {{
+            position: sticky;
+            left: 123px;
+            z-index: 2;
+            min-width: 75px;
+            font-weight: bold;
+            color: #ffffff !important;
+        }}
+        .col-sticky-4 {{
+            position: sticky;
+            left: 198px;
+            z-index: 2;
+            min-width: 75px;
+            border-right: 2px solid #388bfd;
+            color: #8b949e !important;
+        }}
+
+        .priority-row td {{
+            background-color: #161b22 !important;
+        }}
+
+        ::-webkit-scrollbar {{
+            height: 6px;
+            width: 6px;
+        }}
+        ::-webkit-scrollbar-thumb {{
+            background: #30363d;
+            border-radius: 3px;
+        }}
+    </style>
+    </head>
+    <body>
+        <div class="scanner-wrapper">
+            <div class="header-bar">
+                <div style="font-weight: bold; font-size: 13px; color: #00e676;">
+                    ● LIGHTSPEED QUANT | <span style="color: #ffffff;">{current_time}</span>
+                </div>
+                <div style="color: #8b949e; font-size: 11px;">
+                    Stocks (₹300-₹600): <span style="color: #ffffff; font-weight: bold;">{stock_count}</span>
+                </div>
             </div>
-            <div style="color: #8b949e; font-size: 11px;">
-                Stocks (₹300-₹600): <span style="color: #ffffff; font-weight: bold;">{stock_count}</span>
+            <div class="table-responsive">
+                <table class="scanner-table">
+                    <thead>
+                        <tr>
+                            <th class="col-sticky-1">#</th>
+                            <th class="col-sticky-2">SYMBOL</th>
+                            <th class="col-sticky-3">LTP</th>
+                            <th class="col-sticky-4">VWAP</th>
+                            <th style="padding: 4px 8px;">DELTA</th>
+                            <th style="padding: 4px 8px;">RVOL</th>
+                            <th style="padding: 4px 8px;">COBI</th>
+                            <th style="text-align: center; padding: 4px 8px;">RS vs NIFTY</th>
+                            <th style="text-align: center; padding: 4px 8px;">DEMAND / SUPPLY</th>
+                            <th style="text-align: center; padding: 4px 8px;">SMC STRUCTURE</th>
+                            <th style="text-align: center; padding: 4px 8px;">MTF</th>
+                            <th style="text-align: center; padding: 4px 8px;">ACTION</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {table_rows}
+                    </tbody>
+                </table>
             </div>
         </div>
-        <div class="table-responsive">
-            <table class="scanner-table">
-                <thead>
-                    <tr>
-                        <th class="col-sticky-1">#</th>
-                        <th class="col-sticky-2">SYMBOL</th>
-                        <th class="col-sticky-3">LTP</th>
-                        <th class="col-sticky-4">VWAP</th>
-                        <th style="padding: 4px 8px;">DELTA</th>
-                        <th style="padding: 4px 8px;">RVOL</th>
-                        <th style="padding: 4px 8px;">COBI</th>
-                        <th style="text-align: center; padding: 4px 8px;">RS vs NIFTY</th>
-                        <th style="text-align: center; padding: 4px 8px;">DEMAND / SUPPLY</th>
-                        <th style="text-align: center; padding: 4px 8px;">SMC STRUCTURE</th>
-                        <th style="text-align: center; padding: 4px 8px;">MTF (1M|3M|5M|15M)</th>
-                        <th style="text-align: center; padding: 4px 8px;">ACTION</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {table_rows}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    </body>
+    </html>
     """
 
     with placeholder.container():
-        st.markdown(html_code, unsafe_allow_html=True)
+        components.html(full_html, height=800, scrolling=True)
 
     time.sleep(10)
