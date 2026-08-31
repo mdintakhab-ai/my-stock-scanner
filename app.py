@@ -16,6 +16,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from concurrent.futures import ThreadPoolExecutor
 import streamlit as st
+import streamlit.components.v1 as components
 
 # Suppress all non-critical warnings
 warnings.filterwarnings('ignore')
@@ -53,7 +54,6 @@ SESSION.headers.update({
 # -----------------------------------------------------------------------------
 # 1. DYNAMIC NSE UNIVERSE FETCHER
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=3600)
 def fetch_dynamic_universe():
     tickers = set()
     urls = [
@@ -304,7 +304,7 @@ def process_single_symbol(item, full_downloaded_data):
         return None
 
 # -----------------------------------------------------------------------------
-# 4. HTML TERMINAL RENDERER (MOBILE & DESKTOP OPTIMIZED)
+# 4. HTML TERMINAL RENDERER (RESPONSIVE VIEW)
 # -----------------------------------------------------------------------------
 def render_dot(tf_status):
     if tf_status == "UP":
@@ -325,11 +325,7 @@ def build_terminal_html(results, scan_time, total_active_found):
             else "background: rgba(255, 82, 82, 0.2); color: #FF5252; border: 1.5px solid #FF5252;"
         )
 
-        dots_html = f"""
-        <div style="display: flex; gap: 4px; justify-content: center; align-items: center;">
-            {''.join([render_dot(r['MTF_Dots'][tf]) for tf in TIMEFRAMES_LIST])}
-        </div>
-        """
+        dots_html = f"""<div style="display:flex;gap:4px;justify-content:center;align-items:center;">{''.join([render_dot(r['MTF_Dots'][tf]) for tf in TIMEFRAMES_LIST])}</div>"""
 
         delta_color = "#00E676" if r['Delta_Pct'] >= 0 else "#FF5252"
         pms_color = "#00E676" if r['PMS'] > 0 else "#FF5252"
@@ -366,12 +362,16 @@ def build_terminal_html(results, scan_time, total_active_found):
         """
 
     html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        .block-container {{
-            padding-top: 1rem !important;
-            padding-bottom: 0rem !important;
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
+        body {{
+            margin: 0;
+            background-color: #0E1117;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #FFFFFF;
         }}
         ::-webkit-scrollbar {{
             height: 6px;
@@ -382,7 +382,9 @@ def build_terminal_html(results, scan_time, total_active_found):
             border-radius: 3px;
         }}
     </style>
-    <div style="background-color: #0B0E14; padding: 10px; border-radius: 8px; border: 1px solid #1E222D; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+    </head>
+    <body>
+    <div style="background-color: #0B0E14; padding: 10px; border-radius: 8px; border: 1px solid #1E222D;">
         <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 6px;">
             <span style="color: #00E676; font-weight: 800; font-size: 13px; letter-spacing: 0.5px;">
                 ● QUANT SMC SCANNER (₹{MIN_PRICE:.0f}-₹{MAX_PRICE:.0f}) | {scan_time} IST
@@ -390,7 +392,7 @@ def build_terminal_html(results, scan_time, total_active_found):
             <span style="color: #A3B1C6; font-size: 12px; font-weight: 700;">Active Setups: {total_active_found}</span>
         </div>
         <div style="overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 6px;">
-            <table style="width: 100%; border-collapse: collapse; text-align: left; background: #11151C; min-width: 820px;">
+            <table style="width: 100%; border-collapse: collapse; text-align: left; background: #11151C; min-width: 800px;">
                 <thead>
                     <tr style="border-bottom: 2px solid #232733; color: #8B949E; text-transform: uppercase; font-size: 10px; letter-spacing: 0.6px;">
                         <th style="padding: 8px 6px; text-align: center;">#</th>
@@ -413,6 +415,8 @@ def build_terminal_html(results, scan_time, total_active_found):
             </table>
         </div>
     </div>
+    </body>
+    </html>
     """
     return html
 
@@ -422,12 +426,12 @@ def build_terminal_html(results, scan_time, total_active_found):
 def main():
     placeholder = st.empty()
 
-    symbols = fetch_dynamic_universe()
-    if not symbols:
-        symbols = [
-            "BHEL.NS", "BEL.NS", "NAVA.NS", "SUMICHEM.NS", "GMDCLTD.NS", 
-            "ACMESOLAR.NS", "HEXT.NS", "ZENSARTECH.NS", "NATIONALUM.NS", "TATAPOWER.NS"
-        ]
+    symbols = []
+    with st.spinner("Fetching dynamic NSE universe..."):
+        while not symbols:
+            symbols = fetch_dynamic_universe()
+            if not symbols:
+                time.sleep(2)
 
     ticker_map = {sym: sym.replace(".NS", "") for sym in symbols}
     ticker_list = list(ticker_map.keys())
@@ -458,7 +462,8 @@ def main():
                 results = [f.result() for f in futures if f.result() is not None]
 
             html_table = build_terminal_html(results, scan_time, len(results))
-            placeholder.markdown(html_table, unsafe_allow_html=True)
+            with placeholder.container():
+                components.html(html_table, height=750, scrolling=True)
 
             elapsed = time.time() - start_time
             sleep_duration = max(0.5, REFRESH_SECONDS - elapsed)
