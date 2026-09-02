@@ -21,25 +21,20 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Deep Dark Global CSS Injection - Eliminates White Flashing & Streamlit Rerun Dimming
+# Deep Dark Theme Fix - Eliminates White Screen Blinking completely
 st.markdown("""
 <style>
-/* 1. Force Streamlit Root Container to Pure Dark */
 html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], 
 .stApp, .main, div[data-testid="stVerticalBlock"], div[data-testid="stAppViewBlockContainer"] {
     background-color: #090c10 !important;
     background: #090c10 !important;
     color: #ffffff !important;
 }
-
-/* 2. Kill Streamlit's Gray/White Opacity Fade during rerun */
 .stApp > div, [data-testid="stAppViewContainer"] > .main {
     opacity: 1 !important;
     filter: none !important;
     transition: none !important;
 }
-
-/* 3. Hide Streamlit Headers, Toolbars and Spinners */
 header, footer, #MainMenu, 
 div[data-testid="stStatusWidget"], 
 div[data-testid="stToolbar"], 
@@ -47,12 +42,10 @@ div[data-testid="stDecoration"] {
     display: none !important;
     visibility: hidden !important;
 }
-
 .block-container {
     padding: 0rem !important;
     max-width: 100% !important;
 }
-
 iframe {
     width: 100% !important;
     border: none !important;
@@ -314,17 +307,17 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. ZERO-FLICKER DASHBOARD RENDERER
+# 5. ZERO-FLICKER DASHBOARD RENDERER (Mobile & Desktop Full Responsive)
 # -----------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
-def get_locked_universe():
+def get_initial_locked_universe():
     universe = fetch_dynamic_universe()
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         results = list(executor.map(scan_initial_universe, universe))
         locked = [r for r in results if r is not None]
     return sorted(locked, key=lambda x: x['Score'], reverse=True)
 
-locked_universe = get_locked_universe()
+locked_universe = get_initial_locked_universe()
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
     live_data = list(executor.map(fetch_live_updates, locked_universe))
