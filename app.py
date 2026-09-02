@@ -1,14 +1,22 @@
+import time
 import datetime
 import warnings
 import concurrent.futures
+import json
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from flask import Flask, render_template_string, jsonify
+import streamlit as st
+
+# Streamlit Mobile & Wide Layout Optimization Configuration
+st.set_page_config(
+    page_title="⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
 warnings.filterwarnings('ignore')
-
-app = Flask(__name__)
 
 MIN_PRICE = 300.0
 MAX_PRICE = 600.0
@@ -261,56 +269,33 @@ def fetch_live_updates(stock_info):
     except Exception:
         return None
 
-# Global cache to keep scanned locked universe
-LOCKED_UNIVERSE = []
-
-def initialize_scanner():
-    global LOCKED_UNIVERSE
-    universe = fetch_dynamic_universe()
-    print("⏳ Scanning Universe & Initializing Free SMC Engine...")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
-        results = list(executor.map(scan_initial_universe, universe))
-        LOCKED_UNIVERSE = [r for r in results if r is not None]
-    LOCKED_UNIVERSE = sorted(LOCKED_UNIVERSE, key=lambda x: x['Score'], reverse=True)
-    print(f"✅ Filtered {len(LOCKED_UNIVERSE)} Stocks Locked Successfully!")
-
-# Initialize on startup
-initialize_scanner()
-
 # -----------------------------------------------------------------------------
-# 5. MOBILE RESPONSIVE WEB ROUTES
+# 5. STREAMLIT ZERO-FLICKER MOBILE DASHBOARD RENDERER
 # -----------------------------------------------------------------------------
-MOBILE_HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>⚡ FREE QUANT ENGINE | SMC MOBILE</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+def start_stable_streamlit_dashboard():
+    st.markdown("""
     <style>
-        body {
+        .stApp {
             background-color: #090c10;
-            color: #ffffff;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
         .quant-container {
             background-color: #090c10;
             border: 1px solid #1f293d;
             border-radius: 8px;
             padding: 10px;
-            margin-top: 10px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #ffffff !important;
+            overflow-x: auto;
         }
         .quant-header {
             display: flex;
-            flex-direction: column;
-            gap: 5px;
+            justify-content: space-between;
+            align-items: center;
             border-bottom: 1px solid #1f293d;
             padding-bottom: 8px;
             margin-bottom: 10px;
-        }
-        @media(min-width: 768px) {
-            .quant-header { flex-direction: row; justify-content: space-between; align-items: center; }
+            flex-wrap: wrap;
+            gap: 5px;
         }
         .quant-title {
             color: #00e676;
@@ -319,121 +304,113 @@ MOBILE_HTML_TEMPLATE = """
         }
         .quant-clock {
             color: #8b949e;
-            font-size: 10px;
+            font-size: 11px;
             background: #161b22;
             padding: 4px 8px;
             border-radius: 4px;
-            text-align: center;
         }
-        /* Mobile Card Layout for extreme responsiveness */
-        .stock-card {
+        .quant-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 11px;
+            min-width: 800px;
+        }
+        .quant-table th {
             background-color: #161b22;
-            border: 1px solid #21262d;
-            border-radius: 6px;
-            padding: 10px;
-            margin-bottom: 10px;
+            color: #8b949e;
+            text-align: center;
+            padding: 8px 4px;
+            border-bottom: 2px solid #21262d;
+            font-size: 9px;
+            text-transform: uppercase;
         }
-        .card-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 12px;
-            margin-bottom: 6px;
+        .quant-table td {
+            padding: 8px 4px;
+            border-bottom: 1px solid #161b22;
+            color: #ffffff !important;
+            font-weight: 600;
+            text-align: center;
+            vertical-align: middle;
         }
+        .quant-table tr:nth-child(even) { background-color: #0d1117; }
+        .quant-table tr:nth-child(odd) { background-color: #090c10; }
         .symbol-text {
-            color: #ffffff;
+            color: #ffffff !important;
             font-weight: 800;
-            font-size: 14px;
+            font-size: 12px;
+            text-align: left !important;
         }
     </style>
-</head>
-<body>
-    <div class="container-fluid px-2">
-        <div class="quant-container">
-            <div class="quant-header">
-                <div class="quant-title">⚡ FREE QUANT ENGINE | SMC MOBILE</div>
-                <div id="quant-clock-val" class="quant-clock">INITIALIZING STREAM...</div>
-            </div>
-            
-            <div id="mobile-cards-container">
-                <div class="text-center text-muted py-4">Fetching live market data... Please wait.</div>
-            </div>
-        </div>
-    </div>
+    """, unsafe_allow_html=True)
 
-    <script>
-        function fetchLiveData() {
-            fetch('/api/live-data')
-                .then(response => response.json())
-                .then(payload => {
-                    document.getElementById('quant-clock-val').innerText = 'LIVE STREAM: ' + payload.timestamp + ' IST';
-                    const container = document.getElementById('mobile-cards-container');
-                    let html = '';
-                    
-                    payload.data.forEach(row => {
-                        html += `
-                        <div class="stock-card">
-                            <div class="card-row">
-                                <span class="symbol-text">${row.symbol}</span>
-                                <span>${row.ltp} (${row.change})</span>
-                            </div>
-                            <div class="card-row" style="font-size:11px; color:#8b949e;">
-                                <span>Zones: ${row.zones}</span>
-                                <span>Open: ${row.open}</span>
-                            </div>
-                            <hr style="border-color: #21262d; margin: 6px 0;">
-                            <div class="card-row">
-                                <div><strong>EMAs (1|3|5|15m):</strong><br>${row.ema1m} ${row.ema3m} ${row.ema5m} ${row.ema15m}</div>
-                                <div><strong>Target:</strong> ${row.target}</div>
-                            </div>
-                            <div class="card-row mt-2">
-                                <div style="flex-grow: 1; margin-right: 5px;">${row.pressure_box}</div>
-                                <div style="text-align: right;">
-                                    <div style="font-size:10px; color:#8b949e;">TCS Score</div>
-                                    <div>${row.tcs}</div>
-                                </div>
-                            </div>
-                            <div class="card-row mt-1" style="font-size: 11px;">
-                                <span><strong>COBI:</strong> ${row.cobi}</span>
-                            </div>
-                        </div>
-                        `;
-                    });
-                    container.innerHTML = html;
-                })
-                .catch(err => console.error("Error fetching live data:", err));
-        }
+    # Caching initial universe scanning for ultra-fast performance
+    @st.cache_data(ttl=300)
+    def cached_locked_universe():
+        universe = fetch_dynamic_universe()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+            results = list(executor.map(scan_initial_universe, universe))
+            locked_universe = [r for r in results if r is not None]
+        return sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
 
-        // Fetch immediately and poll every 3 seconds
-        fetchLiveData();
-        setInterval(fetchLiveData, 3000);
-    </script>
-</body>
-</html>
-"""
+    locked_universe = cached_locked_universe()
 
-@app.route('/')
-def index():
-    return render_template_string(MOBILE_HTML_TEMPLATE)
+    # Dashboard layout placeholder
+    dashboard_placeholder = st.empty()
 
-@app.route('/api/live-data')
-def live_data_api():
-    global LOCKED_UNIVERSE
-    if not LOCKED_UNIVERSE:
-        initialize_scanner()
-        
+    # Fetch Live Updates & Render
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
-        live_data = list(executor.map(fetch_live_updates, LOCKED_UNIVERSE))
+        live_data = list(executor.map(fetch_live_updates, locked_universe))
         live_data = [d for d in live_data if d is not None]
 
     live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
     for row in live_data: del row['_score']
 
-    payload = {
-        "timestamp": datetime.datetime.now().strftime('%H:%M:%S'),
-        "data": live_data
-    }
-    return jsonify(payload)
+    timestamp_str = datetime.datetime.now().strftime('%H:%M:%S')
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    table_rows_html = ""
+    for row in live_data:
+        table_rows_html += f"""<tr>
+            <td class="symbol-text">{row['symbol']}</td>
+            <td style="text-align:left;">{row['zones']}</td>
+            <td>{row['open']}</td>
+            <td>{row['ltp']}</td>
+            <td>{row['change']}</td>
+            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
+            <td>{row['pressure_box']}</td>
+            <td>{row['target']}</td>
+            <td>{row['tcs']}</td>
+            <td>{row['cobi']}</td>
+        </tr>"""
+
+    base_html = f"""
+    <div class="quant-container">
+        <div class="quant-header">
+            <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
+            <div class="quant-clock">LIVE STREAM: {timestamp_str} IST</div>
+        </div>
+        <table class="quant-table">
+            <thead>
+                <tr>
+                    <th style="text-align:left;">Symbol</th>
+                    <th style="text-align:left;">Zone Alignments</th>
+                    <th>Open</th>
+                    <th>LTP</th>
+                    <th>Change</th>
+                    <th>EMAs (1m|3m|5m|15m)</th>
+                    <th>Supply/Demand Delta Box</th>
+                    <th>Target (₹)</th>
+                    <th>TCS Score</th>
+                    <th>Buyer/Seller (COBI)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {table_rows_html}
+            </tbody>
+        </table>
+    </div>
+    """
+
+    dashboard_placeholder.markdown(base_html, unsafe_allow_html=True)
+
+# Run Streamlit App Engine
+start_streamlit_dashboard = start_stable_streamlit_dashboard()
