@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
+import streamlit.components.v1 as components
 
 warnings.filterwarnings('ignore')
 
@@ -158,7 +159,6 @@ def scan_initial_universe(ticker):
         
         open_price = df_1d['Open'].iloc[-1]
         
-        # Range Filter
         if not (MIN_PRICE <= open_price <= MAX_PRICE): 
             return None
         
@@ -184,9 +184,7 @@ def scan_initial_universe(ticker):
                     matched_tf.append(f"<span style='color:#ff5252; font-weight:700;'>SUPPLY ({tf_name})</span>")
                     confluence_score += 1
                 
-        # If open price is right in the zone or near zone tracking
         if not matched_tf:
-            # Fallback to nearest daily zone tracking to ensure live scanner is never blank
             matched_tf.append("<span style='color:#8b949e; font-weight:600;'>MONITORING</span>")
             confluence_score = 1
 
@@ -211,8 +209,7 @@ def fetch_live_updates(stock_info):
         df_15m = stock.history(period="5d", interval="15m")
         
         if df_live.empty: 
-            df_live = stock_info["df_1d"].tail(2)
-            if df_live.empty: return None
+            df_live = stock_info["df_1d"].tail(10)
         
         current_price = df_live['Close'].iloc[-1]
         open_p = stock_info["Open Price"]
@@ -278,7 +275,7 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT FAST ENGINE RENDERER
+# 5. ZERO-FLICKER STREAMLIT ENGINE RENDERER
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def get_locked_universe():
@@ -288,87 +285,25 @@ def get_locked_universe():
         locked = [r for r in results if r is not None]
     return sorted(locked, key=lambda x: x['Score'], reverse=True)
 
-# Mobile Viewport Optimization
+# Full CSS setup for clean dark rendering
 st.markdown("""
 <style>
-header {visibility: hidden;}
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
+header, #MainMenu, footer {visibility: hidden !important; display: none !important;}
 .block-container {
-    padding-top: 0.2rem !important;
-    padding-bottom: 0.2rem !important;
-    padding-left: 0.2rem !important;
-    padding-right: 0.2rem !important;
+    padding-top: 0rem !important;
+    padding-bottom: 0rem !important;
+    padding-left: 0rem !important;
+    padding-right: 0rem !important;
     max-width: 100% !important;
 }
-.quant-container {
-    background-color: #090c10;
-    border: 1px solid #1f293d;
-    border-radius: 8px;
-    padding: 10px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    color: #ffffff !important;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-}
-.quant-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #1f293d;
-    padding-bottom: 8px;
-    margin-bottom: 8px;
-}
-.quant-title {
-    color: #00e676;
-    font-size: 14px;
-    font-weight: 800;
-}
-.quant-clock {
-    color: #8b949e;
-    font-size: 11px;
-    background: #161b22;
-    padding: 4px 8px;
-    border-radius: 4px;
-    white-space: nowrap;
-}
-.quant-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-    white-space: nowrap;
-}
-.quant-table th {
-    background-color: #161b22;
-    color: #8b949e;
-    text-align: center;
-    padding: 8px 6px;
-    border-bottom: 2px solid #21262d;
-    font-size: 10px;
-    text-transform: uppercase;
-}
-.quant-table td {
-    padding: 8px 6px;
-    border-bottom: 1px solid #161b22;
-    color: #ffffff !important;
-    font-weight: 600;
-    text-align: center;
-    vertical-align: middle;
-}
-.quant-table tr:nth-child(even) { background-color: #0d1117; }
-.quant-table tr:nth-child(odd) { background-color: #090c10; }
-.symbol-text {
-    color: #ffffff !important;
-    font-weight: 800;
-    font-size: 13px;
-    text-align: left !important;
+iframe {
+    width: 100% !important;
+    border: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
 locked_universe = get_locked_universe()
-
-dashboard_placeholder = st.empty()
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
     live_data = list(executor.map(fetch_live_updates, locked_universe))
@@ -381,7 +316,7 @@ for row in live_data:
 
 current_timestamp = datetime.datetime.now().strftime('%H:%M:%S')
 
-# Zero indentation table rows assembly
+# HTML Table Generator (Zero-Flicker Native Browser Renderer)
 table_rows = []
 for row in live_data:
     tr = (
@@ -402,34 +337,113 @@ for row in live_data:
 
 all_rows_html = "".join(table_rows)
 
-full_dashboard_html = (
-    f"<div class='quant-container'>"
-    f"<div class='quant-header'>"
-    f"<div class='quant-title'>⚡ SMC QUANT LIVE ENGINE (MOBILE READY)</div>"
-    f"<div class='quant-clock'>LIVE STREAM: {current_timestamp} IST</div>"
-    f"</div>"
-    f"<table class='quant-table'>"
-    f"<thead>"
-    f"<tr>"
-    f"<th style='text-align:left;'>Symbol</th>"
-    f"<th style='text-align:left;'>Zone Alignments</th>"
-    f"<th>Open</th>"
-    f"<th>LTP</th>"
-    f"<th>Change</th>"
-    f"<th>EMAs (1m|3m|5m|15m)</th>"
-    f"<th>Supply/Demand Delta Box</th>"
-    f"<th>Target (₹)</th>"
-    f"<th>TCS Score</th>"
-    f"<th>Buyer/Seller (COBI)</th>"
-    f"</tr>"
-    f"</thead>"
-    f"<tbody>{all_rows_html}</tbody>"
-    f"</table>"
-    f"</div>"
-)
+complete_html_page = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        body {{
+            background-color: #090c10;
+            margin: 0;
+            padding: 8px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            color: #ffffff;
+            overflow-x: auto;
+        }}
+        .quant-container {{
+            background-color: #090c10;
+            border: 1px solid #1f293d;
+            border-radius: 8px;
+            padding: 10px;
+        }}
+        .quant-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #1f293d;
+            padding-bottom: 8px;
+            margin-bottom: 8px;
+        }}
+        .quant-title {{
+            color: #00e676;
+            font-size: 14px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+        }}
+        .quant-clock {{
+            color: #8b949e;
+            font-size: 11px;
+            background: #161b22;
+            padding: 4px 8px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }}
+        .quant-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            white-space: nowrap;
+        }}
+        .quant-table th {{
+            background-color: #161b22;
+            color: #8b949e;
+            text-align: center;
+            padding: 8px 6px;
+            border-bottom: 2px solid #21262d;
+            font-size: 10px;
+            text-transform: uppercase;
+        }}
+        .quant-table td {{
+            padding: 8px 6px;
+            border-bottom: 1px solid #161b22;
+            color: #ffffff !important;
+            font-weight: 600;
+            text-align: center;
+            vertical-align: middle;
+        }}
+        .quant-table tr:nth-child(even) {{ background-color: #0d1117; }}
+        .quant-table tr:nth-child(odd) {{ background-color: #090c10; }}
+        .symbol-text {{
+            color: #ffffff !important;
+            font-weight: 800;
+            font-size: 13px;
+            text-align: left !important;
+        }}
+    </style>
+</head>
+<body>
+    <div class="quant-container">
+        <div class="quant-header">
+            <div class="quant-title">⚡ SMC QUANT LIVE ENGINE (MOBILE READY)</div>
+            <div class="quant-clock">LIVE STREAM: {current_timestamp} IST</div>
+        </div>
+        <table class="quant-table">
+            <thead>
+                <tr>
+                    <th style="text-align:left;">Symbol</th>
+                    <th style="text-align:left;">Zone Alignments</th>
+                    <th>Open</th>
+                    <th>LTP</th>
+                    <th>Change</th>
+                    <th>EMAs (1m|3m|5m|15m)</th>
+                    <th>Supply/Demand Delta Box</th>
+                    <th>Target (₹)</th>
+                    <th>TCS Score</th>
+                    <th>Buyer/Seller (COBI)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {all_rows_html}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+"""
 
-dashboard_placeholder.markdown(full_dashboard_html, unsafe_allow_html=True)
+components.html(complete_html_page, height=850, scrolling=True)
 
-# 0-delay instant refresh loop
+# 0-delay auto sync
 time.sleep(3)
 st.rerun()
