@@ -317,99 +317,94 @@ def start_stable_colab_dashboard():
             <td>{row['cobi']}</td>
         </tr>"""
 
-    css_style = """
-    <style>
-        .quant-container {
-            background-color: #090c10;
-            border: 1px solid #1f293d;
-            border-radius: 8px;
-            padding: 14px;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            color: #ffffff !important;
-            overflow-x: auto;
-        }
-        .quant-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #1f293d;
-            padding-bottom: 8px;
-            margin-bottom: 10px;
-        }
-        .quant-title {
-            color: #00e676;
-            font-size: 15px;
-            font-weight: 800;
-        }
-        .quant-clock {
-            color: #8b949e;
-            font-size: 11px;
-            background: #161b22;
-            padding: 4px 8px;
-            border-radius: 4px;
-        }
-        .quant-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 12px;
-            min-width: 800px;
-        }
-        .quant-table th {
-            background-color: #161b22;
-            color: #8b949e;
-            text-align: center;
-            padding: 8px 6px;
-            border-bottom: 2px solid #21262d;
-            font-size: 10px;
-            text-transform: uppercase;
-        }
-        .quant-table td {
-            padding: 8px 6px;
-            border-bottom: 1px solid #161b22;
-            color: #ffffff !important;
-            font-weight: 600;
-            text-align: center;
-            vertical-align: middle;
-        }
-        .quant-table tr:nth-child(even) { background-color: #0d1117; }
-        .quant-table tr:nth-child(odd) { background-color: #0d1110; }
-        .symbol-text {
-            color: #ffffff !important;
-            font-weight: 800;
-            font-size: 13px;
-            text-align: left !important;
-        }
-    </style>
-    """
-
-    full_html = f"""
-    {css_style}
-    <div class="quant-container">
-        <div class="quant-header">
-            <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
-            <div class="quant-clock">LIVE STREAM: {timestamp_str} IST</div>
-        </div>
-        <table class="quant-table">
-            <thead>
-                <tr>
-                    <th style="text-align:left;">Symbol</th>
-                    <th style="text-align:left;">Zone Alignments</th>
-                    <th>Open</th>
-                    <th>LTP</th>
-                    <th>Change</th>
-                    <th>EMAs (1m|3m|5m|15m)</th>
-                    <th>Supply/Demand Delta Box</th>
-                    <th>Target (₹)</th>
-                    <th>TCS Score</th>
-                    <th>Buyer/Seller (COBI)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {table_rows_html}
-            </tbody>
-        </table>
+    # Unindented HTML string to prevent Streamlit code-block wrapping
+    full_html = f"""<style>
+.quant-container {{
+    background-color: #090c10;
+    border: 1px solid #1f293d;
+    border-radius: 8px;
+    padding: 14px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #ffffff !important;
+    overflow-x: auto;
+}}
+.quant-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1f293d;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+}}
+.quant-title {{
+    color: #00e676;
+    font-size: 15px;
+    font-weight: 800;
+}}
+.quant-clock {{
+    color: #8b949e;
+    font-size: 11px;
+    background: #161b22;
+    padding: 4px 8px;
+    border-radius: 4px;
+}}
+.quant-table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    min-width: 800px;
+}}
+.quant-table th {{
+    background-color: #161b22;
+    color: #8b949e;
+    text-align: center;
+    padding: 8px 6px;
+    border-bottom: 2px solid #21262d;
+    font-size: 10px;
+    text-transform: uppercase;
+}}
+.quant-table td {{
+    padding: 8px 6px;
+    border-bottom: 1px solid #161b22;
+    color: #ffffff !important;
+    font-weight: 600;
+    text-align: center;
+    vertical-align: middle;
+}}
+.quant-table tr:nth-child(even) {{ background-color: #0d1117; }}
+.quant-table tr:nth-child(odd) {{ background-color: #0d1110; }}
+.symbol-text {{
+    color: #ffffff !important;
+    font-weight: 800;
+    font-size: 13px;
+    text-align: left !important;
+}}
+</style>
+<div class="quant-container">
+    <div class="quant-header">
+        <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
+        <div class="quant-clock">LIVE STREAM: {timestamp_str} IST</div>
     </div>
-    """
+    <table class="quant-table">
+        <thead>
+            <tr>
+                <th style="text-align:left;">Symbol</th>
+                <th style="text-align:left;">Zone Alignments</th>
+                <th>Open</th>
+                <th>LTP</th>
+                <th>Change</th>
+                <th>EMAs (1m|3m|5m|15m)</th>
+                <th>Supply/Demand Delta Box</th>
+                <th>Target (₹)</th>
+                <th>TCS Score</th>
+                <th>Buyer/Seller (COBI)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {table_rows_html}
+        </tbody>
+    </table>
+</div>"""
     
     st.markdown(full_html, unsafe_allow_html=True)
 
