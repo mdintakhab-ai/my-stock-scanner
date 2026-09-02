@@ -1,24 +1,3 @@
-import requests
-import urllib3
-
-# --- 429 RATE LIMIT BYPASS PATCH ---
-class CustomSession(requests.Session):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        })
-
-import yfinance as yf
-yf.set_tz_cache_location(None)
-old_init = yf.Ticker.__init__
-def new_init(self, ticker, session=None, **kwargs):
-    if session is None:
-        session = CustomSession()
-    old_init(self, ticker, session=session, **kwargs)
-yf.Ticker.__init__ = new_init
-# --------------------------------------------------------------------------
-
 import time
 import datetime
 import warnings
@@ -26,9 +5,20 @@ import concurrent.futures
 import json
 import numpy as np
 import pandas as pd
+import yfinance as yf
 import streamlit as st
 
 warnings.filterwarnings('ignore')
+
+# -----------------------------------------------------------------------------
+# PAGE CONFIGURATION (Mobile Responsive & Dark Mode Engine)
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="⚡ SMC QUANT LIVE ENGINE",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
 
 MIN_PRICE = 300.0
 MAX_PRICE = 600.0
@@ -282,108 +272,131 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. ZERO-FLICKER DASHBOARD RENDERER (Streamlit Native Safe Render)
+# 5. FAST DYNAMIC CACHE & STREAMLIT ENGINE
 # -----------------------------------------------------------------------------
-def start_stable_colab_dashboard():
+@st.cache_data(ttl=600, show_spinner=False)
+def get_locked_universe():
     universe = fetch_dynamic_universe()
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
         results = list(executor.map(scan_initial_universe, universe))
-        locked_universe = [r for r in results if r is not None]
+        locked = [r for r in results if r is not None]
+    return sorted(locked, key=lambda x: x['Score'], reverse=True)
 
-    locked_universe = sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        live_data = list(executor.map(fetch_live_updates, locked_universe))
-        live_data = [d for d in live_data if d is not None]
-
-    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
-    for row in live_data: del row['_score']
-
-    timestamp_str = datetime.datetime.now().strftime('%H:%M:%S')
-
-    table_rows_html = ""
-    for row in live_data:
-        table_rows_html += f"""<tr>
-            <td class="symbol-text">{row['symbol']}</td>
-            <td style="text-align:left;">{row['zones']}</td>
-            <td>{row['open']}</td>
-            <td>{row['ltp']}</td>
-            <td>{row['change']}</td>
-            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
-            <td>{row['pressure_box']}</td>
-            <td>{row['target']}</td>
-            <td>{row['tcs']}</td>
-            <td>{row['cobi']}</td>
-        </tr>"""
-
-    # Unindented HTML string to prevent Streamlit code-block wrapping
-    full_html = f"""<style>
-.quant-container {{
-    background-color: #090c10;
-    border: 1px solid #1f293d;
-    border-radius: 8px;
-    padding: 14px;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    color: #ffffff !important;
-    overflow-x: auto;
-}}
-.quant-header {{
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 1px solid #1f293d;
-    padding-bottom: 8px;
-    margin-bottom: 10px;
-}}
-.quant-title {{
-    color: #00e676;
-    font-size: 15px;
-    font-weight: 800;
-}}
-.quant-clock {{
-    color: #8b949e;
-    font-size: 11px;
-    background: #161b22;
-    padding: 4px 8px;
-    border-radius: 4px;
-}}
-.quant-table {{
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 12px;
-    min-width: 800px;
-}}
-.quant-table th {{
-    background-color: #161b22;
-    color: #8b949e;
-    text-align: center;
-    padding: 8px 6px;
-    border-bottom: 2px solid #21262d;
-    font-size: 10px;
-    text-transform: uppercase;
-}}
-.quant-table td {{
-    padding: 8px 6px;
-    border-bottom: 1px solid #161b22;
-    color: #ffffff !important;
-    font-weight: 600;
-    text-align: center;
-    vertical-align: middle;
-}}
-.quant-table tr:nth-child(even) {{ background-color: #0d1117; }}
-.quant-table tr:nth-child(odd) {{ background-color: #0d1110; }}
-.symbol-text {{
-    color: #ffffff !important;
-    font-weight: 800;
-    font-size: 13px;
-    text-align: left !important;
-}}
+# CSS for full mobile viewport responsiveness, horizontal scroll & zero UI lag
+st.markdown("""
+<style>
+    header {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .block-container {
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.5rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        max-width: 100% !important;
+    }
+    .quant-container {
+        background-color: #090c10;
+        border: 1px solid #1f293d;
+        border-radius: 8px;
+        padding: 10px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #ffffff !important;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .quant-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #1f293d;
+        padding-bottom: 8px;
+        margin-bottom: 8px;
+    }
+    .quant-title {
+        color: #00e676;
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+    }
+    .quant-clock {
+        color: #8b949e;
+        font-size: 11px;
+        background: #161b22;
+        padding: 4px 8px;
+        border-radius: 4px;
+        white-space: nowrap;
+    }
+    .quant-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .quant-table th {
+        background-color: #161b22;
+        color: #8b949e;
+        text-align: center;
+        padding: 8px 6px;
+        border-bottom: 2px solid #21262d;
+        font-size: 10px;
+        text-transform: uppercase;
+    }
+    .quant-table td {
+        padding: 8px 6px;
+        border-bottom: 1px solid #161b22;
+        color: #ffffff !important;
+        font-weight: 600;
+        text-align: center;
+        vertical-align: middle;
+    }
+    .quant-table tr:nth-child(even) { background-color: #0d1117; }
+    .quant-table tr:nth-child(odd) { background-color: #090c10; }
+    .symbol-text {
+        color: #ffffff !important;
+        font-weight: 800;
+        font-size: 13px;
+        text-align: left !important;
+    }
 </style>
+""", unsafe_allow_html=True)
+
+locked_universe = get_locked_universe()
+
+# Live Execution Container
+dashboard_placeholder = st.empty()
+
+with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+    live_data = list(executor.map(fetch_live_updates, locked_universe))
+    live_data = [d for d in live_data if d is not None]
+
+live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
+for row in live_data:
+    if '_score' in row:
+        del row['_score']
+
+current_timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+
+table_rows_html = ""
+for row in live_data:
+    table_rows_html += f"""<tr>
+        <td class="symbol-text">{row['symbol']}</td>
+        <td style="text-align:left;">{row['zones']}</td>
+        <td>{row['open']}</td>
+        <td>{row['ltp']}</td>
+        <td>{row['change']}</td>
+        <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
+        <td>{row['pressure_box']}</td>
+        <td>{row['target']}</td>
+        <td>{row['tcs']}</td>
+        <td>{row['cobi']}</td>
+    </tr>"""
+
+full_dashboard_html = f"""
 <div class="quant-container">
     <div class="quant-header">
-        <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
-        <div class="quant-clock">LIVE STREAM: {timestamp_str} IST</div>
+        <div class="quant-title">⚡ SMC QUANT LIVE ENGINE (MOBILE READY)</div>
+        <div class="quant-clock">LIVE STREAM: {current_timestamp} IST</div>
     </div>
     <table class="quant-table">
         <thead>
@@ -404,9 +417,11 @@ def start_stable_colab_dashboard():
             {table_rows_html}
         </tbody>
     </table>
-</div>"""
-    
-    st.markdown(full_html, unsafe_allow_html=True)
+</div>
+"""
 
-# Run Free Engine
-start_stable_colab_dashboard()
+dashboard_placeholder.markdown(full_dashboard_html, unsafe_allow_html=True)
+
+# 0-delay instant rerun for live market streaming
+time.sleep(3)
+st.rerun()
