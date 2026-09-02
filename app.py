@@ -237,13 +237,7 @@ def fetch_live_updates(stock_info):
         if supply_pressure_pct > 75.0:
             retest_alert = f"<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST REJECTION</div>"
 
-        pressure_box_html = f"""
-        <div style='border: 1.5px solid {border_color}; background-color: {bg_color}; padding: 4px 6px; border-radius: 5px; text-align: center;'>
-            <div style='font-size: 10px; font-weight: 800; color: {border_color};'>{status_txt}</div>
-            <div style='font-size: 12px; font-weight: 900; color: #ffffff;'>{supply_pressure_pct:.1f}%</div>
-            {retest_alert}
-        </div>
-        """
+        pressure_box_html = f"<div style='border: 1.5px solid {border_color}; background-color: {bg_color}; padding: 4px 6px; border-radius: 5px; text-align: center;'><div style='font-size: 10px; font-weight: 800; color: {border_color};'>{status_txt}</div><div style='font-size: 12px; font-weight: 900; color: #ffffff;'>{supply_pressure_pct:.1f}%</div>{retest_alert}</div>"
 
         tcs_score = calculate_trade_clearance_score(
             df_live, stock_info["df_1d"], open_p, current_price, stock_info["Score"], supply_pressure_pct
@@ -272,7 +266,7 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. FAST DYNAMIC CACHE & STREAMLIT ENGINE
+# 5. ZERO-FLICKER DASHBOARD RENDERER & ULTRA FAST CACHE
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=600, show_spinner=False)
 def get_locked_universe():
@@ -282,88 +276,86 @@ def get_locked_universe():
         locked = [r for r in results if r is not None]
     return sorted(locked, key=lambda x: x['Score'], reverse=True)
 
-# CSS for full mobile viewport responsiveness, horizontal scroll & zero UI lag
+# Complete Mobile-Optimized CSS injection without Markdown space parsing conflicts
 st.markdown("""
 <style>
-    header {visibility: hidden;}
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    .block-container {
-        padding-top: 0.5rem !important;
-        padding-bottom: 0.5rem !important;
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-        max-width: 100% !important;
-    }
-    .quant-container {
-        background-color: #090c10;
-        border: 1px solid #1f293d;
-        border-radius: 8px;
-        padding: 10px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #ffffff !important;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }
-    .quant-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #1f293d;
-        padding-bottom: 8px;
-        margin-bottom: 8px;
-    }
-    .quant-title {
-        color: #00e676;
-        font-size: 14px;
-        font-weight: 800;
-        letter-spacing: 0.5px;
-    }
-    .quant-clock {
-        color: #8b949e;
-        font-size: 11px;
-        background: #161b22;
-        padding: 4px 8px;
-        border-radius: 4px;
-        white-space: nowrap;
-    }
-    .quant-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-        white-space: nowrap;
-    }
-    .quant-table th {
-        background-color: #161b22;
-        color: #8b949e;
-        text-align: center;
-        padding: 8px 6px;
-        border-bottom: 2px solid #21262d;
-        font-size: 10px;
-        text-transform: uppercase;
-    }
-    .quant-table td {
-        padding: 8px 6px;
-        border-bottom: 1px solid #161b22;
-        color: #ffffff !important;
-        font-weight: 600;
-        text-align: center;
-        vertical-align: middle;
-    }
-    .quant-table tr:nth-child(even) { background-color: #0d1117; }
-    .quant-table tr:nth-child(odd) { background-color: #090c10; }
-    .symbol-text {
-        color: #ffffff !important;
-        font-weight: 800;
-        font-size: 13px;
-        text-align: left !important;
-    }
+header {visibility: hidden;}
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.block-container {
+    padding-top: 0.2rem !important;
+    padding-bottom: 0.2rem !important;
+    padding-left: 0.3rem !important;
+    padding-right: 0.3rem !important;
+    max-width: 100% !important;
+}
+.quant-container {
+    background-color: #090c10;
+    border: 1px solid #1f293d;
+    border-radius: 8px;
+    padding: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #ffffff !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.quant-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1f293d;
+    padding-bottom: 8px;
+    margin-bottom: 8px;
+}
+.quant-title {
+    color: #00e676;
+    font-size: 14px;
+    font-weight: 800;
+}
+.quant-clock {
+    color: #8b949e;
+    font-size: 11px;
+    background: #161b22;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+.quant-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.quant-table th {
+    background-color: #161b22;
+    color: #8b949e;
+    text-align: center;
+    padding: 8px 6px;
+    border-bottom: 2px solid #21262d;
+    font-size: 10px;
+    text-transform: uppercase;
+}
+.quant-table td {
+    padding: 8px 6px;
+    border-bottom: 1px solid #161b22;
+    color: #ffffff !important;
+    font-weight: 600;
+    text-align: center;
+    vertical-align: middle;
+}
+.quant-table tr:nth-child(even) { background-color: #0d1117; }
+.quant-table tr:nth-child(odd) { background-color: #090c10; }
+.symbol-text {
+    color: #ffffff !important;
+    font-weight: 800;
+    font-size: 13px;
+    text-align: left !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
 locked_universe = get_locked_universe()
 
-# Live Execution Container
 dashboard_placeholder = st.empty()
 
 with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
@@ -377,51 +369,55 @@ for row in live_data:
 
 current_timestamp = datetime.datetime.now().strftime('%H:%M:%S')
 
-table_rows_html = ""
+# Zero whitespace/indent table builder to eliminate Markdown Code Block parsing bug
+table_rows = []
 for row in live_data:
-    table_rows_html += f"""<tr>
-        <td class="symbol-text">{row['symbol']}</td>
-        <td style="text-align:left;">{row['zones']}</td>
-        <td>{row['open']}</td>
-        <td>{row['ltp']}</td>
-        <td>{row['change']}</td>
-        <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
-        <td>{row['pressure_box']}</td>
-        <td>{row['target']}</td>
-        <td>{row['tcs']}</td>
-        <td>{row['cobi']}</td>
-    </tr>"""
+    tr = (
+        f"<tr>"
+        f"<td class='symbol-text'>{row['symbol']}</td>"
+        f"<td style='text-align:left;'>{row['zones']}</td>"
+        f"<td>{row['open']}</td>"
+        f"<td>{row['ltp']}</td>"
+        f"<td>{row['change']}</td>"
+        f"<td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>"
+        f"<td>{row['pressure_box']}</td>"
+        f"<td>{row['target']}</td>"
+        f"<td>{row['tcs']}</td>"
+        f"<td>{row['cobi']}</td>"
+        f"</tr>"
+    )
+    table_rows.append(tr)
 
-full_dashboard_html = f"""
-<div class="quant-container">
-    <div class="quant-header">
-        <div class="quant-title">⚡ SMC QUANT LIVE ENGINE (MOBILE READY)</div>
-        <div class="quant-clock">LIVE STREAM: {current_timestamp} IST</div>
-    </div>
-    <table class="quant-table">
-        <thead>
-            <tr>
-                <th style="text-align:left;">Symbol</th>
-                <th style="text-align:left;">Zone Alignments</th>
-                <th>Open</th>
-                <th>LTP</th>
-                <th>Change</th>
-                <th>EMAs (1m|3m|5m|15m)</th>
-                <th>Supply/Demand Delta Box</th>
-                <th>Target (₹)</th>
-                <th>TCS Score</th>
-                <th>Buyer/Seller (COBI)</th>
-            </tr>
-        </thead>
-        <tbody>
-            {table_rows_html}
-        </tbody>
-    </table>
-</div>
-"""
+all_rows_html = "".join(table_rows)
+
+full_dashboard_html = (
+    f"<div class='quant-container'>"
+    f"<div class='quant-header'>"
+    f"<div class='quant-title'>⚡ SMC QUANT LIVE ENGINE (MOBILE READY)</div>"
+    f"<div class='quant-clock'>LIVE STREAM: {current_timestamp} IST</div>"
+    f"</div>"
+    f"<table class='quant-table'>"
+    f"<thead>"
+    f"<tr>"
+    f"<th style='text-align:left;'>Symbol</th>"
+    f"<th style='text-align:left;'>Zone Alignments</th>"
+    f"<th>Open</th>"
+    f"<th>LTP</th>"
+    f"<th>Change</th>"
+    f"<th>EMAs (1m|3m|5m|15m)</th>"
+    f"<th>Supply/Demand Delta Box</th>"
+    f"<th>Target (₹)</th>"
+    f"<th>TCS Score</th>"
+    f"<th>Buyer/Seller (COBI)</th>"
+    f"</tr>"
+    f"</thead>"
+    f"<tbody>{all_rows_html}</tbody>"
+    f"</table>"
+    f"</div>"
+)
 
 dashboard_placeholder.markdown(full_dashboard_html, unsafe_allow_html=True)
 
-# 0-delay instant rerun for live market streaming
+# 0-lag market sync
 time.sleep(3)
 st.rerun()
