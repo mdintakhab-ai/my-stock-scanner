@@ -39,6 +39,8 @@ def fetch_dynamic_universe():
 # 2. QUANT MATHEMATICS & ADVANCED SMC ENGINE
 # -----------------------------------------------------------------------------
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    if df.empty or len(df) < 2:
+        return pd.Series([1.0] * len(df))
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift(1)).abs()
     low_close = (df['Low'] - df['Close'].shift(1)).abs()
@@ -46,7 +48,7 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(window=period).mean()
 
 def extract_advanced_zones(df: pd.DataFrame, pivot_len: int = 2):
-    if len(df) < 25: return [], []
+    if df.empty or len(df) < 25: return [], []
     df = df.copy()
     high, low, open_p, close, vol = df['High'].values, df['Low'].values, df['Open'].values, df['Close'].values, df['Volume'].values
     atr = calculate_atr(df, 14).values
@@ -82,7 +84,7 @@ def extract_advanced_zones(df: pd.DataFrame, pivot_len: int = 2):
     return [b for b in demand_boxes if b['active']], [b for b in supply_boxes if b['active']]
 
 def get_enhanced_ema13_signal(df: pd.DataFrame):
-    if len(df) < 15: return "NEUTRAL"
+    if df.empty or len(df) < 15: return "NEUTRAL"
     close = df['Close'].values
     ema13 = df['Close'].ewm(span=13, adjust=False).mean().values
     
@@ -101,20 +103,22 @@ def get_enhanced_ema13_signal(df: pd.DataFrame):
 # -----------------------------------------------------------------------------
 def calculate_trade_clearance_score(df_live, df_1d, open_p, current_price, mtf_score, supply_pct):
     try:
-        atr = calculate_atr(df_1d, 14).iloc[-1]
+        atr_series = calculate_atr(df_1d, 14)
+        atr = atr_series.iloc[-1] if not atr_series.empty and not np.isnan(atr_series.iloc[-1]) else 1.0
         prev_close = df_1d['Close'].iloc[-2] if len(df_1d) > 1 else open_p
         
         gap_diff = abs(open_p - prev_close)
         s_gap = 100 * max(0, 1 - (gap_diff / (atr if atr > 0 else 1)))
         s_supply = 100 * min(1.0, (supply_pct / 3.0))
         
-        vol_curr = df_live['Volume'].sum()
-        vol_avg = df_1d['Volume'].mean() / 375 
+        vol_curr = df_live['Volume'].sum() if not df_live.empty else 0
+        vol_avg = df_1d['Volume'].mean() / 375 if not df_1d.empty else 1.0
         rovl = vol_curr / (vol_avg * len(df_live) + 1e-5)
         s_vol = min(100, rovl * 50)
         
         s_mtf = min(100, mtf_score * 25)
-        s_regime = 100 if current_price > df_1d['Close'].ewm(span=13).mean().iloc[-1] else 0
+        ema_val = df_1d['Close'].ewm(span=13).mean().iloc[-1] if not df_1d.empty else current_price
+        s_regime = 100 if current_price > ema_val else 0
         
         tcs = (0.25 * s_gap) + (0.25 * s_supply) + (0.20 * s_vol) + (0.15 * s_mtf) + (0.15 * s_regime)
         return min(100.0, max(0.0, tcs))
@@ -122,7 +126,7 @@ def calculate_trade_clearance_score(df_live, df_1d, open_p, current_price, mtf_s
         return 50.0
 
 def calculate_cobi_and_imbalance(df_live):
-    if len(df_live) < 2: return 50.0, 0.0, 50.0
+    if df_live.empty or len(df_live) < 2: return 50.0, 0.0, 50.0
     
     close = df_live['Close'].values
     open_p = df_live['Open'].values
@@ -217,8 +221,9 @@ def fetch_live_updates(stock_info):
             return "<span title='Neutral' style='color:#484f58; font-size:14px;'>●</span>"
 
         buyer_pct, imbalance_delta, cobi = calculate_cobi_and_imbalance(df_live)
-        atr_val = calculate_atr(stock_info["df_1d"], 14).iloc[-1]
-        supply_pressure_pct = min(100.0, max(0.0, (abs(current_price - open_p) / atr_val) * 100))
+        atr_series = calculate_atr(stock_info["df_1d"], 14)
+        atr_val = atr_series.iloc[-1] if not atr_series.empty and not np.isnan(atr_series.iloc[-1]) else 1.0
+        supply_pressure_pct = min(100.0, max(0.0, (abs(current_price - open_p) / (atr_val if atr_val > 0 else 1.0)) * 100))
         
         if "SUPPLY" in stock_info["Zones"]:
             border_color = "#ff3838"
@@ -343,24 +348,32 @@ def start_stable_streamlit_dashboard():
     </style>
     """, unsafe_allow_html=True)
 
-    # Caching initial universe scanning for ultra-fast performance
+    # Caching initial universe scanning with safer worker count to prevent rate limiting
     @st.cache_data(ttl=300)
     def cached_locked_universe():
         universe = fetch_dynamic_universe()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        # Concurrency reduced to 4 to prevent Yahoo Finance HTTP 429 Too Many Requests error
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             results = list(executor.map(scan_initial_universe, universe))
             locked_universe = [r for r in results if r is not None]
         return sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
 
     locked_universe = cached_locked_universe()
 
-    # Dashboard layout placeholder
+    if not locked_universe:
+        st.warning("⚠️ Yahoo Finance Rate Limit (HTTP 429) hit. Please wait 30 seconds and refresh the page.")
+        return
+
     dashboard_placeholder = st.empty()
 
-    # Fetch Live Updates & Render
-    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+    # Fetch Live Updates safely
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         live_data = list(executor.map(fetch_live_updates, locked_universe))
         live_data = [d for d in live_data if d is not None]
+
+    if not live_data:
+        st.warning("⚠️ Live market data temporarily unavailable due to rate limits. Retrying...")
+        return
 
     live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
     for row in live_data: del row['_score']
@@ -413,4 +426,4 @@ def start_stable_streamlit_dashboard():
     dashboard_placeholder.markdown(base_html, unsafe_allow_html=True)
 
 # Run Streamlit App Engine
-start_streamlit_dashboard = start_stable_streamlit_dashboard()
+start_stable_streamlit_dashboard()
