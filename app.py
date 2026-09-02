@@ -1,28 +1,20 @@
-import time
 import datetime
 import warnings
 import concurrent.futures
-import json
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import streamlit as st
+from flask import Flask, render_template_string, jsonify
 
 warnings.filterwarnings('ignore')
 
-# Mobile App Page Configuration
-st.set_page_config(
-    page_title="Lightspeed Quant SMC Engine",
-    page_icon="⚡",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+app = Flask(__name__)
 
 MIN_PRICE = 300.0
 MAX_PRICE = 600.0
 
 # -----------------------------------------------------------------------------
-# 1. DYNAMIC UNIVERSE SCANNER (Original Unchanged Logic)
+# 1. DYNAMIC UNIVERSE SCANNER (Free & Direct Market Scanner)
 # -----------------------------------------------------------------------------
 def fetch_dynamic_universe():
     dynamic_tickers = [
@@ -36,7 +28,7 @@ def fetch_dynamic_universe():
     return list(set(dynamic_tickers))
 
 # -----------------------------------------------------------------------------
-# 2. QUANT MATHEMATICS & ADVANCED SMC ENGINE (Original Base Logic Preserved)
+# 2. QUANT MATHEMATICS & ADVANCED SMC ENGINE
 # -----------------------------------------------------------------------------
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high_low = df['High'] - df['Low']
@@ -97,41 +89,31 @@ def get_enhanced_ema13_signal(df: pd.DataFrame):
     return "NEUTRAL"
 
 # -----------------------------------------------------------------------------
-# 3. ADVANCED QUANT ENGINE (TCS, COBI, IMPRIMIS TARGETS & ZONE DELTA)
+# 3. ADVANCED QUANT ENGINE (TCS, COBI, TARGETS & PRESSURE DELTA)
 # -----------------------------------------------------------------------------
 def calculate_trade_clearance_score(df_live, df_1d, open_p, current_price, mtf_score, supply_pct):
-    """Calculates TCS formula against overnight gap, volume expansion, and sector bias."""
     try:
         atr = calculate_atr(df_1d, 14).iloc[-1]
         prev_close = df_1d['Close'].iloc[-2] if len(df_1d) > 1 else open_p
         
-        # Gap Safety Score (S_gap)
         gap_diff = abs(open_p - prev_close)
         s_gap = 100 * max(0, 1 - (gap_diff / (atr if atr > 0 else 1)))
-        
-        # Supply Clearance Score (S_supply)
         s_supply = 100 * min(1.0, (supply_pct / 3.0))
         
-        # Volume Confirmation (S_vol)
         vol_curr = df_live['Volume'].sum()
-        vol_avg = df_1d['Volume'].mean() / 375 # Per min average proxy
+        vol_avg = df_1d['Volume'].mean() / 375 
         rovl = vol_curr / (vol_avg * len(df_live) + 1e-5)
         s_vol = min(100, rovl * 50)
         
-        # Multi-Timeframe Score (S_mtf)
         s_mtf = min(100, mtf_score * 25)
-        
-        # Regime Score (S_regime)
         s_regime = 100 if current_price > df_1d['Close'].ewm(span=13).mean().iloc[-1] else 0
         
-        # TCS Equation
         tcs = (0.25 * s_gap) + (0.25 * s_supply) + (0.20 * s_vol) + (0.15 * s_mtf) + (0.15 * s_regime)
         return min(100.0, max(0.0, tcs))
     except Exception:
         return 50.0
 
 def calculate_cobi_and_imbalance(df_live):
-    """Computes Buyer/Seller ratio, COBI & Net Imbalance Volume Delta Percentage."""
     if len(df_live) < 2: return 50.0, 0.0, 50.0
     
     close = df_live['Close'].values
@@ -150,14 +132,13 @@ def calculate_cobi_and_imbalance(df_live):
     return buyer_ratio, imbalance_delta_pct, cobi
 
 def calculate_projected_target(current_price, atr_val, direction="SELL"):
-    """Calculates mathematical probable target based on volatility expansion."""
     target_distance = atr_val * 1.618
     if direction == "SELL":
         return current_price - target_distance
     return current_price + target_distance
 
 # -----------------------------------------------------------------------------
-# 4. WORKER THREADS (Original Initial Scanner + Live Data Stream)
+# 4. THREAD WORKERS
 # -----------------------------------------------------------------------------
 def scan_initial_universe(ticker):
     try:
@@ -222,16 +203,12 @@ def fetch_live_updates(stock_info):
         ema_5m = get_enhanced_ema13_signal(df_5m)
         ema_15m = get_enhanced_ema13_signal(df_15m)
 
-        # Micro Dot Formatting for EMAs
         def dot_badge(status):
-            if status == "BULLISH": return "<span title='Bullish EMA13 Alignment' style='color:#00e676; font-size:16px;'>🟢</span>"
-            elif status == "BEARISH": return "<span title='Bearish EMA13 Alignment' style='color:#ff5252; font-size:16px;'>🔴</span>"
-            return "<span title='Neutral EMA' style='color:#484f58; font-size:14px;'>●</span>"
+            if status == "BULLISH": return "<span title='Bullish' style='color:#00e676; font-size:16px;'>🟢</span>"
+            elif status == "BEARISH": return "<span title='Bearish' style='color:#ff5252; font-size:16px;'>🔴</span>"
+            return "<span title='Neutral' style='color:#484f58; font-size:14px;'>●</span>"
 
-        # Orderbook Imbalance & Delta
         buyer_pct, imbalance_delta, cobi = calculate_cobi_and_imbalance(df_live)
-        
-        # Live Dynamic Supply/Demand Pressure Tracker Box
         atr_val = calculate_atr(stock_info["df_1d"], 14).iloc[-1]
         supply_pressure_pct = min(100.0, max(0.0, (abs(current_price - open_p) / atr_val) * 100))
         
@@ -246,7 +223,6 @@ def fetch_live_updates(stock_info):
             status_txt = "DEMAND ABSORPTION"
             proj_target = calculate_projected_target(current_price, atr_val, "BUY")
 
-        # Zone Re-test Alert
         retest_alert = ""
         if supply_pressure_pct > 75.0:
             retest_alert = f"<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST REJECTION</div>"
@@ -259,14 +235,11 @@ def fetch_live_updates(stock_info):
         </div>
         """
 
-        # Trade Clearance Score (TCS Formula Calculation)
         tcs_score = calculate_trade_clearance_score(
             df_live, stock_info["df_1d"], open_p, current_price, stock_info["Score"], supply_pressure_pct
         )
-        
         tcs_color = "#00e676" if tcs_score >= 65 else ("#ffaa00" if tcs_score >= 40 else "#ff5252")
         tcs_html = f"<span style='color:{tcs_color}; font-weight:900;'>{tcs_score:.0f}/100</span>"
-
         change_color = "#00e676" if pnl_pct >= 0 else "#ff5252"
 
         return {
@@ -288,149 +261,179 @@ def fetch_live_updates(stock_info):
     except Exception:
         return None
 
-# -----------------------------------------------------------------------------
-# 5. MOBILE RESPONSIVE UI STYLING & STREAMLIT ENGINE RENDERER
-# -----------------------------------------------------------------------------
-st.markdown("""
-<style>
-    /* Mobile-first CSS Tweaks */
-    .stApp { background-color: #090c10; }
-    .quant-container {
-        background-color: #090c10;
-        border: 1px solid #1f293d;
-        border-radius: 8px;
-        padding: 8px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #ffffff !important;
-        overflow-x: auto;
-    }
-    .quant-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #1f293d;
-        padding-bottom: 8px;
-        margin-bottom: 10px;
-    }
-    .quant-title {
-        color: #00e676;
-        font-size: 13px;
-        font-weight: 800;
-        letter-spacing: 0.5px;
-    }
-    .quant-clock {
-        color: #8b949e;
-        font-size: 10px;
-        background: #161b22;
-        padding: 4px 6px;
-        border-radius: 4px;
-    }
-    .quant-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 11px;
-    }
-    .quant-table th {
-        background-color: #161b22;
-        color: #8b949e;
-        text-align: center;
-        padding: 6px 4px;
-        border-bottom: 2px solid #21262d;
-        font-size: 9px;
-        text-transform: uppercase;
-        white-space: nowrap;
-    }
-    .quant-table td {
-        padding: 6px 4px;
-        border-bottom: 1px solid #161b22;
-        color: #ffffff !important;
-        font-weight: 600;
-        text-align: center;
-        vertical-align: middle;
-        white-space: nowrap;
-    }
-    .quant-table tr:nth-child(even) { background-color: #0d1117; }
-    .quant-table tr:nth-child(odd) { background-color: #090c10; }
-    .symbol-text {
-        color: #ffffff !important;
-        font-weight: 800;
-        font-size: 12px;
-        text-align: left !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Global cache to keep scanned locked universe
+LOCKED_UNIVERSE = []
 
-# Cache initial baseline scanner results to prevent heavy overhead scanning on re-renders
-@st.cache_data(ttl=1800)
-def get_locked_baseline():
+def initialize_scanner():
+    global LOCKED_UNIVERSE
     universe = fetch_dynamic_universe()
+    print("⏳ Scanning Universe & Initializing Free SMC Engine...")
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         results = list(executor.map(scan_initial_universe, universe))
-        locked_universe = [r for r in results if r is not None]
-    return sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
+        LOCKED_UNIVERSE = [r for r in results if r is not None]
+    LOCKED_UNIVERSE = sorted(LOCKED_UNIVERSE, key=lambda x: x['Score'], reverse=True)
+    print(f"✅ Filtered {len(LOCKED_UNIVERSE)} Stocks Locked Successfully!")
 
-# Main Mobile Dashboard Flow
-st.title("⚡ QUANT SMC ENGINE")
+# Initialize on startup
+initialize_scanner()
 
-locked_universe = get_locked_baseline()
+# -----------------------------------------------------------------------------
+# 5. MOBILE RESPONSIVE WEB ROUTES
+# -----------------------------------------------------------------------------
+MOBILE_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚡ FREE QUANT ENGINE | SMC MOBILE</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #090c10;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        .quant-container {
+            background-color: #090c10;
+            border: 1px solid #1f293d;
+            border-radius: 8px;
+            padding: 10px;
+            margin-top: 10px;
+        }
+        .quant-header {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            border-bottom: 1px solid #1f293d;
+            padding-bottom: 8px;
+            margin-bottom: 10px;
+        }
+        @media(min-width: 768px) {
+            .quant-header { flex-direction: row; justify-content: space-between; align-items: center; }
+        }
+        .quant-title {
+            color: #00e676;
+            font-size: 14px;
+            font-weight: 800;
+        }
+        .quant-clock {
+            color: #8b949e;
+            font-size: 10px;
+            background: #161b22;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        /* Mobile Card Layout for extreme responsiveness */
+        .stock-card {
+            background-color: #161b22;
+            border: 1px solid #21262d;
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .card-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+        .symbol-text {
+            color: #ffffff;
+            font-weight: 800;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid px-2">
+        <div class="quant-container">
+            <div class="quant-header">
+                <div class="quant-title">⚡ FREE QUANT ENGINE | SMC MOBILE</div>
+                <div id="quant-clock-val" class="quant-clock">INITIALIZING STREAM...</div>
+            </div>
+            
+            <div id="mobile-cards-container">
+                <div class="text-center text-muted py-4">Fetching live market data... Please wait.</div>
+            </div>
+        </div>
+    </div>
 
-if not locked_universe:
-    st.warning("No stocks matching zone criteria in ₹300-₹600 range currently.")
-else:
+    <script>
+        function fetchLiveData() {
+            fetch('/api/live-data')
+                .then(response => response.json())
+                .then(payload => {
+                    document.getElementById('quant-clock-val').innerText = 'LIVE STREAM: ' + payload.timestamp + ' IST';
+                    const container = document.getElementById('mobile-cards-container');
+                    let html = '';
+                    
+                    payload.data.forEach(row => {
+                        html += `
+                        <div class="stock-card">
+                            <div class="card-row">
+                                <span class="symbol-text">${row.symbol}</span>
+                                <span>${row.ltp} (${row.change})</span>
+                            </div>
+                            <div class="card-row" style="font-size:11px; color:#8b949e;">
+                                <span>Zones: ${row.zones}</span>
+                                <span>Open: ${row.open}</span>
+                            </div>
+                            <hr style="border-color: #21262d; margin: 6px 0;">
+                            <div class="card-row">
+                                <div><strong>EMAs (1|3|5|15m):</strong><br>${row.ema1m} ${row.ema3m} ${row.ema5m} ${row.ema15m}</div>
+                                <div><strong>Target:</strong> ${row.target}</div>
+                            </div>
+                            <div class="card-row mt-2">
+                                <div style="flex-grow: 1; margin-right: 5px;">${row.pressure_box}</div>
+                                <div style="text-align: right;">
+                                    <div style="font-size:10px; color:#8b949e;">TCS Score</div>
+                                    <div>${row.tcs}</div>
+                                </div>
+                            </div>
+                            <div class="card-row mt-1" style="font-size: 11px;">
+                                <span><strong>COBI:</strong> ${row.cobi}</span>
+                            </div>
+                        </div>
+                        `;
+                    });
+                    container.innerHTML = html;
+                })
+                .catch(err => console.error("Error fetching live data:", err));
+        }
+
+        // Fetch immediately and poll every 3 seconds
+        fetchLiveData();
+        setInterval(fetchLiveData, 3000);
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(MOBILE_HTML_TEMPLATE)
+
+@app.route('/api/live-data')
+def live_data_api():
+    global LOCKED_UNIVERSE
+    if not LOCKED_UNIVERSE:
+        initialize_scanner()
+        
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
-        live_data = list(executor.map(fetch_live_updates, locked_universe))
+        live_data = list(executor.map(fetch_live_updates, LOCKED_UNIVERSE))
         live_data = [d for d in live_data if d is not None]
 
     live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
-    
-    timestamp = datetime.datetime.now().strftime('%H:%M:%S')
-    
-    # Render Mobile Responsive Table HTML
-    rows_html = ""
-    for row in live_data:
-        rows_html += f"""<tr>
-            <td class="symbol-text">{row['symbol']}</td>
-            <td style="text-align:left;">{row['zones']}</td>
-            <td>{row['open']}</td>
-            <td>{row['ltp']}</td>
-            <td>{row['change']}</td>
-            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
-            <td>{row['pressure_box']}</td>
-            <td>{row['target']}</td>
-            <td>{row['tcs']}</td>
-            <td>{row['cobi']}</td>
-        </tr>"""
+    for row in live_data: del row['_score']
 
-    table_html = f"""
-    <div class="quant-container">
-        <div class="quant-header">
-            <div class="quant-title">LIGHTSPEED SMC DASHBOARD</div>
-            <div class="quant-clock">LIVE: {timestamp} IST</div>
-        </div>
-        <table class="quant-table">
-            <thead>
-                <tr>
-                    <th style="text-align:left;">Symbol</th>
-                    <th style="text-align:left;">Zones</th>
-                    <th>Open</th>
-                    <th>LTP</th>
-                    <th>Change</th>
-                    <th>EMAs (1m|3m|5m|15m)</th>
-                    <th>Pressure Box</th>
-                    <th>Target</th>
-                    <th>TCS</th>
-                    <th>COBI</th>
-                </tr>
-            </thead>
-            <tbody>
-                {rows_html}
-            </tbody>
-        </table>
-    </div>
-    """
-    
-    st.markdown(table_html, unsafe_allow_html=True)
+    payload = {
+        "timestamp": datetime.datetime.now().strftime('%H:%M:%S'),
+        "data": live_data
+    }
+    return jsonify(payload)
 
-# Mobile Auto-Refresh Trigger (3 Seconds Interval)
-time.sleep(3)
-st.rerun()
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=False)
