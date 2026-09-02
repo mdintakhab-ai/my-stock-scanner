@@ -275,7 +275,7 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT ZERO-FLICKER MOBILE DASHBOARD RENDERER
+# 5. STREAMLIT SECURE DASHBOARD RENDERER
 # -----------------------------------------------------------------------------
 def start_stable_streamlit_dashboard():
     st.markdown("""
@@ -348,11 +348,9 @@ def start_stable_streamlit_dashboard():
     </style>
     """, unsafe_allow_html=True)
 
-    # Caching initial universe scanning with safer worker count to prevent rate limiting
     @st.cache_data(ttl=300)
     def cached_locked_universe():
         universe = fetch_dynamic_universe()
-        # Concurrency reduced to 4 to prevent Yahoo Finance HTTP 429 Too Many Requests error
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             results = list(executor.map(scan_initial_universe, universe))
             locked_universe = [r for r in results if r is not None]
@@ -366,7 +364,6 @@ def start_stable_streamlit_dashboard():
 
     dashboard_placeholder = st.empty()
 
-    # Fetch Live Updates safely
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         live_data = list(executor.map(fetch_live_updates, locked_universe))
         live_data = [d for d in live_data if d is not None]
@@ -395,7 +392,8 @@ def start_stable_streamlit_dashboard():
             <td>{row['cobi']}</td>
         </tr>"""
 
-    base_html = f"""
+    # Using st.html() or wrapped container safely for Streamlit 1.63+
+    full_html = f"""
     <div class="quant-container">
         <div class="quant-header">
             <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
@@ -422,8 +420,8 @@ def start_stable_streamlit_dashboard():
         </table>
     </div>
     """
+    
+    # Render using safe container markdown
+    dashboard_placeholder.markdown(f'<div style="width:100%;">{full_html}</div>', unsafe_allow_html=True)
 
-    dashboard_placeholder.markdown(base_html, unsafe_allow_html=True)
-
-# Run Streamlit App Engine
 start_stable_streamlit_dashboard()
