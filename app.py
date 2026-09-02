@@ -1,7 +1,7 @@
 import requests
 import urllib3
 
-# --- 429 RATE LIMIT BYPASS PATCH ---
+# --- 429 RATE LIMIT BYPASS PATCH (Aapke original code ko touch kiye bina) ---
 class CustomSession(requests.Session):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -282,22 +282,44 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. ZERO-FLICKER DASHBOARD RENDERER (Streamlit Wrapped)
+# 5. ZERO-FLICKER DASHBOARD RENDERER (Streamlit Native Safe Render)
 # -----------------------------------------------------------------------------
 def start_stable_colab_dashboard():
     universe = fetch_dynamic_universe()
-    print("⏳ Scanning Universe & Initializing Free SMC Engine...")
     
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         results = list(executor.map(scan_initial_universe, universe))
         locked_universe = [r for r in results if r is not None]
 
     locked_universe = sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
-    print(f"✅ Filtered {len(locked_universe)} Stocks Locked Successfully!")
 
-    base_html = """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        live_data = list(executor.map(fetch_live_updates, locked_universe))
+        live_data = [d for d in live_data if d is not None]
+
+    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
+    for row in live_data: del row['_score']
+
+    timestamp_str = datetime.datetime.now().strftime('%H:%M:%S')
+
+    table_rows_html = ""
+    for row in live_data:
+        table_rows_html += f"""<tr>
+            <td class="symbol-text">{row['symbol']}</td>
+            <td style="text-align:left;">{row['zones']}</td>
+            <td>{row['open']}</td>
+            <td>{row['ltp']}</td>
+            <td>{row['change']}</td>
+            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
+            <td>{row['pressure_box']}</td>
+            <td>{row['target']}</td>
+            <td>{row['tcs']}</td>
+            <td>{row['cobi']}</td>
+        </tr>"""
+
+    full_html = f"""
     <style>
-        .quant-container {
+        .quant-container {{
             background-color: #090c10;
             border: 1px solid #1f293d;
             border-radius: 8px;
@@ -305,34 +327,34 @@ def start_stable_colab_dashboard():
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             color: #ffffff !important;
             overflow-x: auto;
-        }
-        .quant-header {
+        }}
+        .quant-header {{
             display: flex;
             justify-content: space-between;
             align-items: center;
             border-bottom: 1px solid #1f293d;
             padding-bottom: 8px;
             margin-bottom: 10px;
-        }
-        .quant-title {
+        }}
+        .quant-title {{
             color: #00e676;
             font-size: 15px;
             font-weight: 800;
-        }
-        .quant-clock {
+        }}
+        .quant-clock {{
             color: #8b949e;
             font-size: 11px;
             background: #161b22;
             padding: 4px 8px;
             border-radius: 4px;
-        }
-        .quant-table {
+        }}
+        .quant-table {{
             width: 100%;
             border-collapse: collapse;
             font-size: 12px;
             min-width: 800px;
-        }
-        .quant-table th {
+        }}
+        .quant-table th {{
             background-color: #161b22;
             color: #8b949e;
             text-align: center;
@@ -340,29 +362,29 @@ def start_stable_colab_dashboard():
             border-bottom: 2px solid #21262d;
             font-size: 10px;
             text-transform: uppercase;
-        }
-        .quant-table td {
+        }}
+        .quant-table td {{
             padding: 8px 6px;
             border-bottom: 1px solid #161b22;
             color: #ffffff !important;
             font-weight: 600;
             text-align: center;
             vertical-align: middle;
-        }
-        .quant-table tr:nth-child(even) { background-color: #0d1117; }
-        .quant-table tr:nth-child(odd) { background-color: #090c10; }
-        .symbol-text {
+        }}
+        .quant-table tr:nth-child(even) {{ background-color: #0d1117; }}
+        .quant-table tr:nth-child(odd) {{ background-color: #0d1110; }}
+        .symbol-text {{
             color: #ffffff !important;
             font-weight: 800;
             font-size: 13px;
             text-align: left !important;
-        }
+        }}
     </style>
 
     <div class="quant-container">
         <div class="quant-header">
             <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
-            <div id="quant-clock-val" class="quant-clock">INITIALIZING STREAM...</div>
+            <div class="quant-clock">LIVE STREAM: {timestamp_str} IST</div>
         </div>
         <table class="quant-table">
             <thead>
@@ -379,47 +401,14 @@ def start_stable_colab_dashboard():
                     <th>Buyer/Seller (COBI)</th>
                 </tr>
             </thead>
-            <tbody id="quant-table-body"></tbody>
+            <tbody>
+                {table_rows_html}
+            </tbody>
         </table>
     </div>
     """
     
-    st.markdown(base_html, unsafe_allow_html=True)
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        live_data = list(executor.map(fetch_live_updates, locked_universe))
-        live_data = [d for d in live_data if d is not None]
-
-    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
-    for row in live_data: del row['_score']
-
-    payload = {
-        "timestamp": datetime.datetime.now().strftime('%H:%M:%S'),
-        "data": live_data
-    }
-
-    table_rows_html = ""
-    for row in payload["data"]:
-        table_rows_html += f"""<tr>
-            <td class="symbol-text">{row['symbol']}</td>
-            <td style="text-align:left;">{row['zones']}</td>
-            <td>{row['open']}</td>
-            <td>{row['ltp']}</td>
-            <td>{row['change']}</td>
-            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
-            <td>{row['pressure_box']}</td>
-            <td>{row['target']}</td>
-            <td>{row['tcs']}</td>
-            <td>{row['cobi']}</td>
-        </tr>"""
-
-    js_injection = f"""
-    <script>
-        document.getElementById('quant-clock-val').innerText = 'LIVE STREAM: {payload["timestamp"]} IST';
-        document.getElementById('quant-table-body').innerHTML = `{table_rows_html}`;
-    </script>
-    """
-    st.markdown(js_injection, unsafe_allow_html=True)
+    st.markdown(full_html, unsafe_allow_html=True)
 
 # Run Free Engine
 start_stable_colab_dashboard()
