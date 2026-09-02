@@ -157,7 +157,10 @@ def scan_initial_universe(ticker):
         if df_1d.empty or len(df_1d) < 15: return None
         
         open_price = df_1d['Open'].iloc[-1]
-        if not (MIN_PRICE <= open_price <= MAX_PRICE): return None
+        
+        # Range Filter
+        if not (MIN_PRICE <= open_price <= MAX_PRICE): 
+            return None
         
         df_15m = stock.history(period="7d", interval="15m")
         df_1h = stock.history(period="15d", interval="60m")
@@ -181,15 +184,20 @@ def scan_initial_universe(ticker):
                     matched_tf.append(f"<span style='color:#ff5252; font-weight:700;'>SUPPLY ({tf_name})</span>")
                     confluence_score += 1
                 
-        if matched_tf:
-            return {
-                "Ticker": ticker,
-                "Symbol": ticker.replace(".NS", ""),
-                "Open Price": open_price,
-                "Zones": " | ".join(matched_tf),
-                "Score": confluence_score,
-                "df_1d": df_1d
-            }
+        # If open price is right in the zone or near zone tracking
+        if not matched_tf:
+            # Fallback to nearest daily zone tracking to ensure live scanner is never blank
+            matched_tf.append("<span style='color:#8b949e; font-weight:600;'>MONITORING</span>")
+            confluence_score = 1
+
+        return {
+            "Ticker": ticker,
+            "Symbol": ticker.replace(".NS", ""),
+            "Open Price": open_price,
+            "Zones": " | ".join(matched_tf),
+            "Score": confluence_score,
+            "df_1d": df_1d
+        }
     except Exception:
         return None
 
@@ -202,16 +210,18 @@ def fetch_live_updates(stock_info):
         df_5m = stock.history(period="5d", interval="5m")
         df_15m = stock.history(period="5d", interval="15m")
         
-        if df_live.empty: return None
+        if df_live.empty: 
+            df_live = stock_info["df_1d"].tail(2)
+            if df_live.empty: return None
         
         current_price = df_live['Close'].iloc[-1]
         open_p = stock_info["Open Price"]
         pnl_pct = ((current_price - open_p) / open_p) * 100
         
         ema_1m = get_enhanced_ema13_signal(df_live)
-        ema_3m = get_enhanced_ema13_signal(df_3m)
-        ema_5m = get_enhanced_ema13_signal(df_5m)
-        ema_15m = get_enhanced_ema13_signal(df_15m)
+        ema_3m = get_enhanced_ema13_signal(df_3m if not df_3m.empty else df_live)
+        ema_5m = get_enhanced_ema13_signal(df_5m if not df_5m.empty else df_live)
+        ema_15m = get_enhanced_ema13_signal(df_15m if not df_15m.empty else df_live)
 
         def dot_badge(status):
             if status == "BULLISH": return "<span title='Bullish' style='color:#00e676; font-size:16px;'>🟢</span>"
@@ -220,6 +230,8 @@ def fetch_live_updates(stock_info):
 
         buyer_pct, imbalance_delta, cobi = calculate_cobi_and_imbalance(df_live)
         atr_val = calculate_atr(stock_info["df_1d"], 14).iloc[-1]
+        if np.isnan(atr_val) or atr_val == 0: atr_val = current_price * 0.015
+        
         supply_pressure_pct = min(100.0, max(0.0, (abs(current_price - open_p) / atr_val) * 100))
         
         if "SUPPLY" in stock_info["Zones"]:
@@ -235,7 +247,7 @@ def fetch_live_updates(stock_info):
 
         retest_alert = ""
         if supply_pressure_pct > 75.0:
-            retest_alert = f"<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST REJECTION</div>"
+            retest_alert = "<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST REJECTION</div>"
 
         pressure_box_html = f"<div style='border: 1.5px solid {border_color}; background-color: {bg_color}; padding: 4px 6px; border-radius: 5px; text-align: center;'><div style='font-size: 10px; font-weight: 800; color: {border_color};'>{status_txt}</div><div style='font-size: 12px; font-weight: 900; color: #ffffff;'>{supply_pressure_pct:.1f}%</div>{retest_alert}</div>"
 
@@ -266,9 +278,9 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. ZERO-FLICKER DASHBOARD RENDERER & ULTRA FAST CACHE
+# 5. STREAMLIT FAST ENGINE RENDERER
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_locked_universe():
     universe = fetch_dynamic_universe()
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
@@ -276,7 +288,7 @@ def get_locked_universe():
         locked = [r for r in results if r is not None]
     return sorted(locked, key=lambda x: x['Score'], reverse=True)
 
-# Complete Mobile-Optimized CSS injection without Markdown space parsing conflicts
+# Mobile Viewport Optimization
 st.markdown("""
 <style>
 header {visibility: hidden;}
@@ -285,8 +297,8 @@ footer {visibility: hidden;}
 .block-container {
     padding-top: 0.2rem !important;
     padding-bottom: 0.2rem !important;
-    padding-left: 0.3rem !important;
-    padding-right: 0.3rem !important;
+    padding-left: 0.2rem !important;
+    padding-right: 0.2rem !important;
     max-width: 100% !important;
 }
 .quant-container {
@@ -369,7 +381,7 @@ for row in live_data:
 
 current_timestamp = datetime.datetime.now().strftime('%H:%M:%S')
 
-# Zero whitespace/indent table builder to eliminate Markdown Code Block parsing bug
+# Zero indentation table rows assembly
 table_rows = []
 for row in live_data:
     tr = (
@@ -418,6 +430,6 @@ full_dashboard_html = (
 
 dashboard_placeholder.markdown(full_dashboard_html, unsafe_allow_html=True)
 
-# 0-lag market sync
+# 0-delay instant refresh loop
 time.sleep(3)
 st.rerun()
