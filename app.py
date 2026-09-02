@@ -1,7 +1,7 @@
 import requests
 import urllib3
 
-# --- 429 RATE LIMIT BYPASS PATCH (Aapke original code ko touch kiye bina) ---
+# --- 429 RATE LIMIT BYPASS PATCH ---
 class CustomSession(requests.Session):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -11,7 +11,6 @@ class CustomSession(requests.Session):
 
 import yfinance as yf
 yf.set_tz_cache_location(None)
-# Patching yfinance default session to bypass Cloudflare/Yahoo 429 blocks
 old_init = yf.Ticker.__init__
 def new_init(self, ticker, session=None, **kwargs):
     if session is None:
@@ -28,7 +27,6 @@ import json
 import numpy as np
 import pandas as pd
 import streamlit as st
-from IPython.display import display, HTML
 
 warnings.filterwarnings('ignore')
 
