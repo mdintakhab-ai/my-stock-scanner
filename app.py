@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
-import streamlit.components.v1 as components
 
 warnings.filterwarnings('ignore')
 
@@ -17,6 +16,27 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# Streamlit Native Blank/Flicker/Jumping Guard Injection
+st.markdown("""
+<style>
+    header, footer, #MainMenu {visibility: hidden !important;}
+    .block-container {
+        padding: 0.5rem 0.5rem 0rem 0.5rem !important;
+        max-width: 100% !important;
+        background-color: #090c10 !important;
+    }
+    html, body, [data-testid="stAppViewContainer"] {
+        background-color: #090c10 !important;
+        color: #ffffff !important;
+        overflow-x: hidden;
+    }
+    iframe {
+        border: none !important;
+        background-color: #090c10 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # GLOBAL PARAMETERS (EXACT MATCH)
@@ -277,7 +297,7 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT ULTRA-FAST ZERO-FLICKER MOBILE MOUNT
+# 5. STREAMLIT ULTRA-FAST ZERO-FLICKER PERSISTENT MOUNT
 # -----------------------------------------------------------------------------
 if 'locked_universe' not in st.session_state:
     universe = fetch_dynamic_universe()
@@ -287,158 +307,66 @@ if 'locked_universe' not in st.session_state:
             locked_universe = [r for r in results if r is not None]
         st.session_state.locked_universe = sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
-    live_data = list(executor.map(fetch_live_updates, st.session_state.locked_universe))
-    live_data = [d for d in live_data if d is not None]
+# Persistent UI Slot - Prevents White Flashes & Screen Jumping
+dashboard_slot = st.empty()
 
-live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
-for row in live_data: 
-    if '_score' in row: del row['_score']
+while True:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+        live_data = list(executor.map(fetch_live_updates, st.session_state.locked_universe))
+        live_data = [d for d in live_data if d is not None]
 
-payload_data = json.dumps(live_data)
-current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
+    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
+    for row in live_data: 
+        if '_score' in row: del row['_score']
 
-# Pure HTML/CSS/JS Component Optimized for Mobile Screen Breakpoints
-mobile_dashboard_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-    * {{
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-        -webkit-tap-highlight-color: transparent;
-    }}
-    body {{
-        background-color: #090c10;
-        color: #ffffff;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        padding: 4px;
-    }}
-    .quant-container {{
-        background-color: #090c10;
-        border: 1px solid #1f293d;
-        border-radius: 8px;
-        padding: 8px;
-    }}
-    .quant-header {{
-        display: flex;
-        flex-direction: row;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #1f293d;
-        padding-bottom: 6px;
-        margin-bottom: 8px;
-    }}
-    .quant-title {{
-        color: #00e676;
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.5px;
-    }}
-    .quant-clock {{
-        color: #8b949e;
-        font-size: 10px;
-        background: #161b22;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-family: monospace;
-    }}
-    .table-wrapper {{
-        width: 100%;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }}
-    .quant-table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 11px;
-        min-width: 650px;
-    }}
-    .quant-table th {{
-        background-color: #161b22;
-        color: #8b949e;
-        text-align: center;
-        padding: 6px 4px;
-        border-bottom: 2px solid #21262d;
-        font-size: 9px;
-        text-transform: uppercase;
-        white-space: nowrap;
-    }}
-    .quant-table td {{
-        padding: 6px 4px;
-        border-bottom: 1px solid #161b22;
-        color: #ffffff !important;
-        font-weight: 600;
-        text-align: center;
-        vertical-align: middle;
-        white-space: nowrap;
-    }}
-    .quant-table tr:nth-child(even) {{ background-color: #0d1117; }}
-    .quant-table tr:nth-child(odd) {{ background-color: #090c10; }}
-    .symbol-text {{
-        color: #ffffff !important;
-        font-weight: 800;
-        font-size: 12px;
-        text-align: left !important;
-    }}
-</style>
-</head>
-<body>
-    <div class="quant-container">
-        <div class="quant-header">
-            <div class="quant-title">⚡ SMC QUANT ENGINE (MOBILE)</div>
-            <div id="quant-clock-val" class="quant-clock">LIVE: {current_time_str} IST</div>
-        </div>
-        <div class="table-wrapper">
-            <table class="quant-table">
-                <thead>
-                    <tr>
-                        <th style="text-align:left;">Symbol</th>
-                        <th style="text-align:left;">Zone Alignments</th>
-                        <th>Open</th>
-                        <th>LTP</th>
-                        <th>Change</th>
-                        <th>EMAs (1|3|5|15)</th>
-                        <th>Supply/Demand Delta</th>
-                        <th>Target (₹)</th>
-                        <th>TCS</th>
-                        <th>COBI Imbalance</th>
-                    </tr>
-                </thead>
-                <tbody id="quant-table-body"></tbody>
-            </table>
+    current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
+
+    rows_html = "".join([
+        f"""<tr>
+            <td class="symbol-text">{row['symbol']}</td>
+            <td style="text-align:left;">{row['zones']}</td>
+            <td>{row['open']}</td>
+            <td>{row['ltp']}</td>
+            <td>{row['change']}</td>
+            <td>{row['ema1m']}{row['ema3m']}{row['ema5m']}{row['ema15m']}</td>
+            <td>{row['pressure_box']}</td>
+            <td>{row['target']}</td>
+            <td>{row['tcs']}</td>
+            <td>{row['cobi']}</td>
+        </tr>""" for row in live_data
+    ])
+
+    mobile_dashboard_html = f"""
+    <div style="background-color: #090c10; padding: 4px; border-radius: 8px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #ffffff;">
+        <div style="border: 1px solid #1f293d; border-radius: 8px; padding: 8px; background-color: #090c10;">
+            <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1f293d; padding-bottom: 6px; margin-bottom: 8px;">
+                <div style="color: #00e676; font-size: 11px; font-weight: 800; letter-spacing: 0.5px;">⚡ SMC QUANT ENGINE (MOBILE)</div>
+                <div style="color: #8b949e; font-size: 10px; background: #161b22; padding: 2px 6px; border-radius: 4px; font-family: monospace;">LIVE: {current_time_str} IST</div>
+            </div>
+            <div style="width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 11px; min-width: 650px;">
+                    <thead>
+                        <tr style="background-color: #161b22; color: #8b949e; font-size: 9px; text-transform: uppercase;">
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: left;">Symbol</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: left;">Zone Alignments</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">Open</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">LTP</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">Change</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">EMAs (1|3|5|15)</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">Supply/Demand Delta</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">Target (₹)</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">TCS</th>
+                            <th style="padding: 6px 4px; border-bottom: 2px solid #21262d; text-align: center;">COBI Imbalance</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {rows_html}
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
+    """
 
-    <script>
-        const rawData = {payload_data};
-        const tbody = document.getElementById('quant-table-body');
-        let html = '';
-        rawData.forEach(row => {{
-            html += `<tr>
-                <td class="symbol-text">${{row.symbol}}</td>
-                <td style="text-align:left;">${{row.zones}}</td>
-                <td>${{row.open}}</td>
-                <td>${{row.ltp}}</td>
-                <td>${{row.change}}</td>
-                <td>${{row.ema1m}}${{row.ema3m}}${{row.ema5m}}${{row.ema15m}}</td>
-                <td>${{row.pressure_box}}</td>
-                <td>${{row.target}}</td>
-                <td>${{row.tcs}}</td>
-                <td>${{row.cobi}}</td>
-            </tr>`;
-        }});
-        tbody.innerHTML = html;
-    </script>
-</body>
-</html>
-"""
-
-components.html(mobile_dashboard_html, height=720, scrolling=True)
-
-# Continuous Background Ultra-Light Refresh Loop
-time.sleep(2)
-st.rerun()
+    dashboard_slot.markdown(mobile_dashboard_html, unsafe_allow_html=True)
+    time.sleep(2)
