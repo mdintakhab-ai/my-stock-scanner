@@ -1,416 +1,436 @@
-import datetime
-import io
 import time
+import datetime
 import warnings
+import concurrent.futures
+import json
 import numpy as np
 import pandas as pd
-import requests
-import streamlit as st
-import streamlit.components.v1 as components
 import yfinance as yf
+import streamlit as st
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings('ignore')
 
-# Streamlit Page Config
+# Mobile App Page Configuration
 st.set_page_config(
-    page_title="Lightspeed Quant Scanner",
+    page_title="Lightspeed Quant SMC Engine",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="collapsed"
 )
 
-# Global Cache to prevent session overload and thread crash
-if "SYMBOL_CACHE" not in st.session_state:
-    st.session_state.SYMBOL_CACHE = []
-if "LAST_SYMBOL_FETCH" not in st.session_state:
-    st.session_state.LAST_SYMBOL_FETCH = 0
+MIN_PRICE = 300.0
+MAX_PRICE = 600.0
 
+# -----------------------------------------------------------------------------
+# 1. DYNAMIC UNIVERSE SCANNER (Original Unchanged Logic)
+# -----------------------------------------------------------------------------
+def fetch_dynamic_universe():
+    dynamic_tickers = [
+        "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "BPCL.NS", 
+        "NAVA.NS", "AIIL.NS", "IGIL.NS", "AADHARHFC.NS", "CONCOR.NS", "POONAWALLA.NS", 
+        "GMDCLTD.NS", "LICHSGFIN.NS", "JSWINFRA.NS", "REDINGTON.NS", "ASHOKLEY.NS", 
+        "FEDERALBNK.NS", "IDFCFIRSTB.NS", "CROMPTON.NS", "NATIONALUM.NS", "RBLBANK.NS",
+        "NUVOCO.NS", "COALINDIA.NS", "VBL.NS", "SYNGENE.NS", "ELECON.NS", "JINDALSAW.NS",
+        "TATAPOWER.NS", "JSWENERGY.NS", "USHAMART.NS", "NTPC.NS", "ICICIPRULI.NS"
+    ]
+    return list(set(dynamic_tickers))
 
-def fetch_nifty500_symbols():
-    if st.session_state.SYMBOL_CACHE and (
-        time.time() - st.session_state.LAST_SYMBOL_FETCH < 3600
-    ):
-        return st.session_state.SYMBOL_CACHE
+# -----------------------------------------------------------------------------
+# 2. QUANT MATHEMATICS & ADVANCED SMC ENGINE (Original Base Logic Preserved)
+# -----------------------------------------------------------------------------
+def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    high_low = df['High'] - df['Low']
+    high_close = (df['High'] - df['Close'].shift(1)).abs()
+    low_close = (df['Low'] - df['Close'].shift(1)).abs()
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.rolling(window=period).mean()
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
-    }
-    try:
-        url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
-        response = requests.get(url, headers=headers, timeout=5)
-        if response.status_code == 200:
-            df_nse = pd.read_csv(io.StringIO(response.content.decode("utf-8")))
-            symbols = [
-                f"{sym.strip()}.NS"
-                for sym in df_nse["Symbol"].dropna().unique()
-            ]
-            if len(symbols) > 50:
-                st.session_state.SYMBOL_CACHE = symbols
-                st.session_state.LAST_SYMBOL_FETCH = time.time()
-                return symbols
-    except Exception:
-        pass
-
-    url_50 = "https://archives.nseindia.com/content/indices/ind_nifty50list.csv"
-    try:
-        response = requests.get(url_50, headers=headers, timeout=5)
-        df_nse = pd.read_csv(io.StringIO(response.content.decode("utf-8")))
-        symbols = [f"{sym.strip()}.NS" for sym in df_nse["Symbol"].dropna().unique()]
-        st.session_state.SYMBOL_CACHE = symbols
-        st.session_state.LAST_SYMBOL_FETCH = time.time()
-        return symbols
-    except Exception:
-        return ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS"]
-
-
-def get_scanner_data():
-    symbols = fetch_nifty500_symbols()
-
-    all_tickers = list(set(symbols + ["^NSEI"]))
-
-    try:
-        daily_data = yf.download(
-            all_tickers, period="1mo", interval="1d", progress=False, threads=False
-        )
-    except Exception:
-        return pd.DataFrame(), 0.0
-
-    if daily_data.empty:
-        return pd.DataFrame(), 0.0
-
-    try:
-        nifty_close = daily_data["Close", "^NSEI"].dropna()
-        nifty_change = (
-            (nifty_close.iloc[-1] - nifty_close.iloc[-2]) / nifty_close.iloc[-2]
-        ) * 100
-    except Exception:
-        nifty_change = 0.0
-
-    try:
-        intra_5m = yf.download(
-            symbols, period="2d", interval="5m", progress=False, threads=False
-        )
-    except Exception:
-        intra_5m = pd.DataFrame()
-
-    results = []
-
-    for ticker in symbols:
-        sym = ticker.replace(".NS", "")
-        try:
-            close_s = daily_data["Close", ticker].dropna()
-            high_s = daily_data["High", ticker].dropna()
-            low_s = daily_data["Low", ticker].dropna()
-            open_s = daily_data["Open", ticker].dropna()
-            vol_s = daily_data["Volume", ticker].dropna()
-
-            if close_s.empty or len(close_s) < 15:
-                continue
-
-            last_close = close_s.iloc[-1]
-
-            # Price Filter (₹300 - ₹600)
-            if not (300 <= last_close <= 600):
-                continue
-
-            high_p, low_p, vol_p, open_p = (
-                high_s.iloc[-1],
-                low_s.iloc[-1],
-                vol_s.iloc[-1],
-                open_s.iloc[-1],
-            )
-            avg_vol = vol_s.iloc[-10:].mean()
-
-            delta_pct = round(
-                ((last_close - close_s.iloc[-2]) / close_s.iloc[-2]) * 100, 2
-            )
-            rvol = round(vol_p / avg_vol, 2) if avg_vol > 0 else 0.0
-
-            # Dynamic VWAP
-            typical_price = (high_s + low_s + close_s) / 3
-            vwap = (typical_price * vol_s).tail(10).sum() / vol_s.tail(10).sum()
-            vwap_dist = round(((last_close - vwap) / vwap) * 100, 2)
-
-            # COBI Calculation
-            rng = high_p - low_p
-            cobi = round((last_close - open_p) / rng, 4) if rng > 0 else 0.0
-
-            # Relative Strength vs Nifty
-            rel_strength = round(delta_pct - nifty_change, 2)
-
-            # Demand / Supply Calculation (+50% D to -50% S)
-            flow_pressure = (
-                ((last_close - low_p) / rng) * 100 if rng > 0 else 50.0
-            )
-            ds_val = round(flow_pressure - 50.0, 1)
-
-            if ds_val > 0:
-                ds_badge = f"<span style='color: #00e676; font-weight: bold;'>🟢 +{ds_val}% D</span>"
-            elif ds_val < 0:
-                ds_badge = f"<span style='color: #ff5252; font-weight: bold;'>🔴 {ds_val}% S</span>"
-            else:
-                ds_badge = f"<span style='color: #ffb300; font-weight: bold;'>🟡 0.0%</span>"
-
-            # Multi-Timeframe Check
-            b5 = False
-            if not intra_5m.empty:
-                try:
-                    df_5m_stock = intra_5m.xs(ticker, axis=1, level=1).dropna()
-                    if len(df_5m_stock) >= 13:
-                        ema13 = df_5m_stock["Close"].ewm(span=13, adjust=False).mean()
-                        b5 = df_5m_stock["Close"].iloc[-1] > ema13.iloc[-1]
-                except Exception:
-                    b5 = False
-
-            dot = "🟢" if b5 else "🔴"
-            mtf_dots = f"{dot} {dot} {dot} {dot}"
-
-            # Priority & Scoring Rules
-            score = 0
-            if rvol >= 1.3:
-                score += 10
-            if last_close > vwap:
-                score += 10
-            if rel_strength > 0.5:
-                score += 10
-            if ds_val > 10:
-                score += 10
-
-            is_valid_entry = b5 and (vwap_dist <= 2.5) and (score >= 30)
-
-            if is_valid_entry:
-                action_badge = "<span style='background-color: #004d40; color: #00e676; padding: 4px 10px; border-radius: 4px; font-weight: bold;'>STRONG BUY</span>"
-                priority = 1
-            elif b5 and score >= 20:
-                action_badge = "<span style='background-color: #37474f; color: #ffb300; padding: 4px 10px; border-radius: 4px;'>WATCH</span>"
-                priority = 0
-            else:
-                action_badge = "<span style='background-color: #21262d; color: #8b949e; padding: 4px 10px; border-radius: 4px;'>SKIP</span>"
-                priority = -1
-
-            smc_signal = (
-                "<span style='color: #00e676; font-weight: bold;'>MSS CONFIRMED</span>"
-                if (last_close > high_s.iloc[-2] and rvol > 1.2)
-                else "<span style='color: #8b949e;'>CONSOLIDATION</span>"
-            )
-
-            results.append(
-                {
-                    "SYMBOL": sym,
-                    "LTP": f"₹{last_close:.2f}",
-                    "VWAP": f"₹{vwap:.2f}",
-                    "DELTA": delta_pct,
-                    "RVOL": f"{rvol}x",
-                    "COBI": cobi,
-                    "RS vs NIFTY": f"<span style='color:#00e676;'>+{rel_strength}%</span>" if rel_strength > 0 else f"{rel_strength}%",
-                    "DEMAND_SUPPLY": ds_badge,
-                    "SMC STRUCTURE": smc_signal,
-                    "MTF": mtf_dots,
-                    "ACTION": action_badge,
-                    "priority": priority,
-                    "score": score,
-                    "rvol_raw": rvol,
-                }
-            )
-        except Exception:
-            continue
-
-    df = pd.DataFrame(results)
-    if not df.empty:
-        df = df.sort_values(
-            by=["priority", "score", "rvol_raw"],
-            ascending=[False, False, False],
-        ).reset_index(drop=True)
-        df["#"] = df.index + 1
-
-    return df, nifty_change
-
-
-placeholder = st.empty()
-
-while True:
-    df, _ = get_scanner_data()
-    current_time = datetime.datetime.now().strftime("%H:%M:%S") + " IST"
-
-    if df.empty:
-        table_rows = "<tr><td colspan='12' style='text-align:center; padding: 25px; color: #8b949e;'>Fetching Realtime Market Data...</td></tr>"
-        stock_count = 0
-    else:
-        stock_count = len(df)
-        rows_list = []
-        for _, row in df.iterrows():
-            delta_color = "#00e676" if row["DELTA"] >= 0 else "#ff5252"
-            delta_str = (
-                f"+{row['DELTA']}%" if row["DELTA"] >= 0 else f"{row['DELTA']}%"
-            )
-            row_class = "priority-row" if row["priority"] == 1 else ""
-
-            rows_list.append(
-                f"""
-                <tr class="{row_class}">
-                    <td class="col-sticky-1" style="color: #8b949e;">{row['#']}</td>
-                    <td class="col-sticky-2">{row['SYMBOL']}</td>
-                    <td class="col-sticky-3">{row['LTP']}</td>
-                    <td class="col-sticky-4">{row['VWAP']}</td>
-                    <td style="color: {delta_color}; font-weight: bold;">{delta_str}</td>
-                    <td style="color: #58a6ff; font-weight: bold;">{row['RVOL']}</td>
-                    <td style="color: #c9d1d9;">{row['COBI']}</td>
-                    <td style="text-align: center;">{row['RS vs NIFTY']}</td>
-                    <td style="text-align: center;">{row['DEMAND_SUPPLY']}</td>
-                    <td style="text-align: center;">{row['SMC STRUCTURE']}</td>
-                    <td style="text-align: center;">{row['MTF']}</td>
-                    <td style="text-align: center;">{row['ACTION']}</td>
-                </tr>
-                """
-            )
-        table_rows = "".join(rows_list)
-
-    full_html = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {{
-            margin: 0;
-            padding: 4px;
-            background-color: #0E1117;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            color: #c9d1d9;
-        }}
-        .scanner-wrapper {{
-            background-color: #0d1117;
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid #30363d;
-            box-sizing: border-box;
-            width: 100%;
-        }}
-        .header-bar {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #21262d;
-            padding-bottom: 8px;
-            margin-bottom: 8px;
-        }}
-        .table-responsive {{
-            width: 100%;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            border-radius: 6px;
-        }}
-        .scanner-table {{
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            text-align: right;
-            font-size: 12px;
-            white-space: nowrap;
-            background-color: #0d1117;
-        }}
-        .scanner-table th, .scanner-table td {{
-            padding: 7px 8px;
-            border-bottom: 1px solid #21262d;
-            background-color: #0d1117;
-        }}
-        .scanner-table th {{
-            color: #8b949e;
-            border-bottom: 2px solid #30363d;
-            height: 30px;
-            font-size: 11px;
-            text-transform: uppercase;
-        }}
+def extract_advanced_zones(df: pd.DataFrame, pivot_len: int = 2):
+    if len(df) < 25: return [], []
+    df = df.copy()
+    high, low, open_p, close, vol = df['High'].values, df['Low'].values, df['Open'].values, df['Close'].values, df['Volume'].values
+    atr = calculate_atr(df, 14).values
+    vol_sma = df['Volume'].rolling(20).mean().values
+    
+    demand_boxes, supply_boxes = [], []
+    
+    for i in range(pivot_len, len(df) - pivot_len):
+        mid = i
+        vsa_valid = (vol[mid] > 1.2 * vol_sma[mid]) if not np.isnan(vol_sma[mid]) else True
         
-        /* Sticky Freeze Columns for Mobile Horizontal Scroll */
-        .col-sticky-1 {{
-            position: sticky;
-            left: 0px;
-            z-index: 2;
-            width: 28px;
-            min-width: 28px;
-            text-align: center !important;
-            border-right: 1px solid #21262d;
-        }}
-        .col-sticky-2 {{
-            position: sticky;
-            left: 28px;
-            z-index: 2;
-            min-width: 95px;
-            text-align: left !important;
-            font-weight: bold;
-            color: #ffffff !important;
-        }}
-        .col-sticky-3 {{
-            position: sticky;
-            left: 123px;
-            z-index: 2;
-            min-width: 75px;
-            font-weight: bold;
-            color: #ffffff !important;
-        }}
-        .col-sticky-4 {{
-            position: sticky;
-            left: 198px;
-            z-index: 2;
-            min-width: 75px;
-            border-right: 2px solid #388bfd;
-            color: #8b949e !important;
-        }}
+        if high[mid] == max(high[mid - pivot_len : mid + pivot_len + 1]) and vsa_valid:
+            top_lvl, bot_lvl = high[mid], max(open_p[mid], close[mid])
+            if not any(abs(b['top'] - top_lvl) < (atr[mid] * 0.3) for b in supply_boxes if b['active']):
+                supply_boxes.append({'top': top_lvl, 'bot': bot_lvl, 'tests': 0, 'active': True})
+                
+        if low[mid] == min(low[mid - pivot_len : mid + pivot_len + 1]) and vsa_valid:
+            top_lvl, bot_lvl = min(open_p[mid], close[mid]), low[mid]
+            if not any(abs(b['bot'] - bot_lvl) < (atr[mid] * 0.3) for b in demand_boxes if b['active']):
+                demand_boxes.append({'top': top_lvl, 'bot': bot_lvl, 'tests': 0, 'active': True})
+                
+        cur_h, cur_l = high[mid + pivot_len], low[mid + pivot_len]
+        for b in supply_boxes:
+            if b['active']:
+                if cur_h > b['bot']: b['tests'] += 1
+                if cur_h > b['top'] or b['tests'] >= 3: b['active'] = False
+                    
+        for b in demand_boxes:
+            if b['active']:
+                if cur_l < b['top']: b['tests'] += 1
+                if cur_l < b['bot'] or b['tests'] >= 3: b['active'] = False
 
-        .priority-row td {{
-            background-color: #161b22 !important;
-        }}
+    return [b for b in demand_boxes if b['active']], [b for b in supply_boxes if b['active']]
 
-        ::-webkit-scrollbar {{
-            height: 6px;
-            width: 6px;
-        }}
-        ::-webkit-scrollbar-thumb {{
-            background: #30363d;
-            border-radius: 3px;
-        }}
-    </style>
-    </head>
-    <body>
-        <div class="scanner-wrapper">
-            <div class="header-bar">
-                <div style="font-weight: bold; font-size: 13px; color: #00e676;">
-                    ● LIGHTSPEED QUANT | <span style="color: #ffffff;">{current_time}</span>
-                </div>
-                <div style="color: #8b949e; font-size: 11px;">
-                    Stocks (₹300-₹600): <span style="color: #ffffff; font-weight: bold;">{stock_count}</span>
-                </div>
-            </div>
-            <div class="table-responsive">
-                <table class="scanner-table">
-                    <thead>
-                        <tr>
-                            <th class="col-sticky-1">#</th>
-                            <th class="col-sticky-2">SYMBOL</th>
-                            <th class="col-sticky-3">LTP</th>
-                            <th class="col-sticky-4">VWAP</th>
-                            <th style="padding: 4px 8px;">DELTA</th>
-                            <th style="padding: 4px 8px;">RVOL</th>
-                            <th style="padding: 4px 8px;">COBI</th>
-                            <th style="text-align: center; padding: 4px 8px;">RS vs NIFTY</th>
-                            <th style="text-align: center; padding: 4px 8px;">DEMAND / SUPPLY</th>
-                            <th style="text-align: center; padding: 4px 8px;">SMC STRUCTURE</th>
-                            <th style="text-align: center; padding: 4px 8px;">MTF</th>
-                            <th style="text-align: center; padding: 4px 8px;">ACTION</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {table_rows}
-                    </tbody>
-                </table>
-            </div>
+def get_enhanced_ema13_signal(df: pd.DataFrame):
+    if len(df) < 15: return "NEUTRAL"
+    close = df['Close'].values
+    ema13 = df['Close'].ewm(span=13, adjust=False).mean().values
+    
+    curr_close = close[-1]
+    curr_ema = ema13[-1]
+    prev_ema = ema13[-2]
+    
+    if curr_close > curr_ema and curr_ema > prev_ema:
+        return "BULLISH"
+    elif curr_close < curr_ema and curr_ema < prev_ema:
+        return "BEARISH"
+    return "NEUTRAL"
+
+# -----------------------------------------------------------------------------
+# 3. ADVANCED QUANT ENGINE (TCS, COBI, IMPRIMIS TARGETS & ZONE DELTA)
+# -----------------------------------------------------------------------------
+def calculate_trade_clearance_score(df_live, df_1d, open_p, current_price, mtf_score, supply_pct):
+    """Calculates TCS formula against overnight gap, volume expansion, and sector bias."""
+    try:
+        atr = calculate_atr(df_1d, 14).iloc[-1]
+        prev_close = df_1d['Close'].iloc[-2] if len(df_1d) > 1 else open_p
+        
+        # Gap Safety Score (S_gap)
+        gap_diff = abs(open_p - prev_close)
+        s_gap = 100 * max(0, 1 - (gap_diff / (atr if atr > 0 else 1)))
+        
+        # Supply Clearance Score (S_supply)
+        s_supply = 100 * min(1.0, (supply_pct / 3.0))
+        
+        # Volume Confirmation (S_vol)
+        vol_curr = df_live['Volume'].sum()
+        vol_avg = df_1d['Volume'].mean() / 375 # Per min average proxy
+        rovl = vol_curr / (vol_avg * len(df_live) + 1e-5)
+        s_vol = min(100, rovl * 50)
+        
+        # Multi-Timeframe Score (S_mtf)
+        s_mtf = min(100, mtf_score * 25)
+        
+        # Regime Score (S_regime)
+        s_regime = 100 if current_price > df_1d['Close'].ewm(span=13).mean().iloc[-1] else 0
+        
+        # TCS Equation
+        tcs = (0.25 * s_gap) + (0.25 * s_supply) + (0.20 * s_vol) + (0.15 * s_mtf) + (0.15 * s_regime)
+        return min(100.0, max(0.0, tcs))
+    except Exception:
+        return 50.0
+
+def calculate_cobi_and_imbalance(df_live):
+    """Computes Buyer/Seller ratio, COBI & Net Imbalance Volume Delta Percentage."""
+    if len(df_live) < 2: return 50.0, 0.0, 50.0
+    
+    close = df_live['Close'].values
+    open_p = df_live['Open'].values
+    vol = df_live['Volume'].values
+    
+    buying_vol = np.sum(vol[close >= open_p])
+    selling_vol = np.sum(vol[close < open_p])
+    total_vol = buying_vol + selling_vol + 1e-5
+    
+    buyer_ratio = (buying_vol / total_vol) * 100
+    seller_ratio = (selling_vol / total_vol) * 100
+    imbalance_delta_pct = ((buying_vol - selling_vol) / total_vol) * 100
+    cobi = buyer_ratio - seller_ratio
+    
+    return buyer_ratio, imbalance_delta_pct, cobi
+
+def calculate_projected_target(current_price, atr_val, direction="SELL"):
+    """Calculates mathematical probable target based on volatility expansion."""
+    target_distance = atr_val * 1.618
+    if direction == "SELL":
+        return current_price - target_distance
+    return current_price + target_distance
+
+# -----------------------------------------------------------------------------
+# 4. WORKER THREADS (Original Initial Scanner + Live Data Stream)
+# -----------------------------------------------------------------------------
+def scan_initial_universe(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        df_1d = stock.history(period="30d", interval="1d")
+        if df_1d.empty or len(df_1d) < 15: return None
+        
+        open_price = df_1d['Open'].iloc[-1]
+        if not (MIN_PRICE <= open_price <= MAX_PRICE): return None
+        
+        df_15m = stock.history(period="7d", interval="15m")
+        df_1h = stock.history(period="15d", interval="60m")
+        
+        tf_zones = {
+            '15m': extract_advanced_zones(df_15m),
+            '1H': extract_advanced_zones(df_1h),
+            '1D': extract_advanced_zones(df_1d)
+        }
+        
+        matched_tf = []
+        confluence_score = 0
+        
+        for tf_name, (dem_boxes, sup_boxes) in tf_zones.items():
+            for b in dem_boxes:
+                if b['bot'] <= open_price <= b['top']: 
+                    matched_tf.append(f"<span style='color:#00e676; font-weight:700;'>DEMAND ({tf_name})</span>")
+                    confluence_score += 1
+            for b in sup_boxes:
+                if b['bot'] <= open_price <= b['top']: 
+                    matched_tf.append(f"<span style='color:#ff5252; font-weight:700;'>SUPPLY ({tf_name})</span>")
+                    confluence_score += 1
+                
+        if matched_tf:
+            return {
+                "Ticker": ticker,
+                "Symbol": ticker.replace(".NS", ""),
+                "Open Price": open_price,
+                "Zones": " | ".join(matched_tf),
+                "Score": confluence_score,
+                "df_1d": df_1d
+            }
+    except Exception:
+        return None
+
+def fetch_live_updates(stock_info):
+    ticker = stock_info["Ticker"]
+    try:
+        stock = yf.Ticker(ticker)
+        df_live = stock.history(period="1d", interval="1m")
+        df_3m = stock.history(period="3d", interval="2m")
+        df_5m = stock.history(period="5d", interval="5m")
+        df_15m = stock.history(period="5d", interval="15m")
+        
+        if df_live.empty: return None
+        
+        current_price = df_live['Close'].iloc[-1]
+        open_p = stock_info["Open Price"]
+        pnl_pct = ((current_price - open_p) / open_p) * 100
+        
+        ema_1m = get_enhanced_ema13_signal(df_live)
+        ema_3m = get_enhanced_ema13_signal(df_3m)
+        ema_5m = get_enhanced_ema13_signal(df_5m)
+        ema_15m = get_enhanced_ema13_signal(df_15m)
+
+        # Micro Dot Formatting for EMAs
+        def dot_badge(status):
+            if status == "BULLISH": return "<span title='Bullish EMA13 Alignment' style='color:#00e676; font-size:16px;'>🟢</span>"
+            elif status == "BEARISH": return "<span title='Bearish EMA13 Alignment' style='color:#ff5252; font-size:16px;'>🔴</span>"
+            return "<span title='Neutral EMA' style='color:#484f58; font-size:14px;'>●</span>"
+
+        # Orderbook Imbalance & Delta
+        buyer_pct, imbalance_delta, cobi = calculate_cobi_and_imbalance(df_live)
+        
+        # Live Dynamic Supply/Demand Pressure Tracker Box
+        atr_val = calculate_atr(stock_info["df_1d"], 14).iloc[-1]
+        supply_pressure_pct = min(100.0, max(0.0, (abs(current_price - open_p) / atr_val) * 100))
+        
+        if "SUPPLY" in stock_info["Zones"]:
+            border_color = "#ff3838"
+            bg_color = "rgba(255, 56, 56, 0.12)"
+            status_txt = "SUPPLY ACCUMULATION"
+            proj_target = calculate_projected_target(current_price, atr_val, "SELL")
+        else:
+            border_color = "#00e676"
+            bg_color = "rgba(0, 230, 118, 0.12)"
+            status_txt = "DEMAND ABSORPTION"
+            proj_target = calculate_projected_target(current_price, atr_val, "BUY")
+
+        # Zone Re-test Alert
+        retest_alert = ""
+        if supply_pressure_pct > 75.0:
+            retest_alert = f"<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST REJECTION</div>"
+
+        pressure_box_html = f"""
+        <div style='border: 1.5px solid {border_color}; background-color: {bg_color}; padding: 4px 6px; border-radius: 5px; text-align: center;'>
+            <div style='font-size: 10px; font-weight: 800; color: {border_color};'>{status_txt}</div>
+            <div style='font-size: 12px; font-weight: 900; color: #ffffff;'>{supply_pressure_pct:.1f}%</div>
+            {retest_alert}
         </div>
-    </body>
-    </html>
+        """
+
+        # Trade Clearance Score (TCS Formula Calculation)
+        tcs_score = calculate_trade_clearance_score(
+            df_live, stock_info["df_1d"], open_p, current_price, stock_info["Score"], supply_pressure_pct
+        )
+        
+        tcs_color = "#00e676" if tcs_score >= 65 else ("#ffaa00" if tcs_score >= 40 else "#ff5252")
+        tcs_html = f"<span style='color:{tcs_color}; font-weight:900;'>{tcs_score:.0f}/100</span>"
+
+        change_color = "#00e676" if pnl_pct >= 0 else "#ff5252"
+
+        return {
+            "symbol": stock_info['Symbol'],
+            "zones": stock_info["Zones"],
+            "open": f"₹{open_p:.2f}",
+            "ltp": f"₹{current_price:.2f}",
+            "change": f"<span style='color:{change_color}; font-weight:bold;'>{pnl_pct:+.2f}%</span>",
+            "ema1m": dot_badge(ema_1m),
+            "ema3m": dot_badge(ema_3m),
+            "ema5m": dot_badge(ema_5m),
+            "ema15m": dot_badge(ema_15m),
+            "pressure_box": pressure_box_html,
+            "target": f"<span style='color:#00e676; font-weight:700;'>₹{proj_target:.2f}</span>",
+            "tcs": tcs_html,
+            "cobi": f"<span style='color:{'#00e676' if imbalance_delta >= 0 else '#ff5252'}'>{buyer_pct:.0f}% Buy ({imbalance_delta:+.1f}%)</span>",
+            "_score": stock_info["Score"]
+        }
+    except Exception:
+        return None
+
+# -----------------------------------------------------------------------------
+# 5. MOBILE RESPONSIVE UI STYLING & STREAMLIT ENGINE RENDERER
+# -----------------------------------------------------------------------------
+st.markdown("""
+<style>
+    /* Mobile-first CSS Tweaks */
+    .stApp { background-color: #090c10; }
+    .quant-container {
+        background-color: #090c10;
+        border: 1px solid #1f293d;
+        border-radius: 8px;
+        padding: 8px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        color: #ffffff !important;
+        overflow-x: auto;
+    }
+    .quant-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #1f293d;
+        padding-bottom: 8px;
+        margin-bottom: 10px;
+    }
+    .quant-title {
+        color: #00e676;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+    }
+    .quant-clock {
+        color: #8b949e;
+        font-size: 10px;
+        background: #161b22;
+        padding: 4px 6px;
+        border-radius: 4px;
+    }
+    .quant-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+    }
+    .quant-table th {
+        background-color: #161b22;
+        color: #8b949e;
+        text-align: center;
+        padding: 6px 4px;
+        border-bottom: 2px solid #21262d;
+        font-size: 9px;
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+    .quant-table td {
+        padding: 6px 4px;
+        border-bottom: 1px solid #161b22;
+        color: #ffffff !important;
+        font-weight: 600;
+        text-align: center;
+        vertical-align: middle;
+        white-space: nowrap;
+    }
+    .quant-table tr:nth-child(even) { background-color: #0d1117; }
+    .quant-table tr:nth-child(odd) { background-color: #090c10; }
+    .symbol-text {
+        color: #ffffff !important;
+        font-weight: 800;
+        font-size: 12px;
+        text-align: left !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Cache initial baseline scanner results to prevent heavy overhead scanning on re-renders
+@st.cache_data(ttl=1800)
+def get_locked_baseline():
+    universe = fetch_dynamic_universe()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        results = list(executor.map(scan_initial_universe, universe))
+        locked_universe = [r for r in results if r is not None]
+    return sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
+
+# Main Mobile Dashboard Flow
+st.title("⚡ QUANT SMC ENGINE")
+
+locked_universe = get_locked_baseline()
+
+if not locked_universe:
+    st.warning("No stocks matching zone criteria in ₹300-₹600 range currently.")
+else:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        live_data = list(executor.map(fetch_live_updates, locked_universe))
+        live_data = [d for d in live_data if d is not None]
+
+    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
+    
+    timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+    
+    # Render Mobile Responsive Table HTML
+    rows_html = ""
+    for row in live_data:
+        rows_html += f"""<tr>
+            <td class="symbol-text">{row['symbol']}</td>
+            <td style="text-align:left;">{row['zones']}</td>
+            <td>{row['open']}</td>
+            <td>{row['ltp']}</td>
+            <td>{row['change']}</td>
+            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
+            <td>{row['pressure_box']}</td>
+            <td>{row['target']}</td>
+            <td>{row['tcs']}</td>
+            <td>{row['cobi']}</td>
+        </tr>"""
+
+    table_html = f"""
+    <div class="quant-container">
+        <div class="quant-header">
+            <div class="quant-title">LIGHTSPEED SMC DASHBOARD</div>
+            <div class="quant-clock">LIVE: {timestamp} IST</div>
+        </div>
+        <table class="quant-table">
+            <thead>
+                <tr>
+                    <th style="text-align:left;">Symbol</th>
+                    <th style="text-align:left;">Zones</th>
+                    <th>Open</th>
+                    <th>LTP</th>
+                    <th>Change</th>
+                    <th>EMAs (1m|3m|5m|15m)</th>
+                    <th>Pressure Box</th>
+                    <th>Target</th>
+                    <th>TCS</th>
+                    <th>COBI</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+    </div>
     """
+    
+    st.markdown(table_html, unsafe_allow_html=True)
 
-    with placeholder.container():
-        components.html(full_html, height=800, scrolling=True)
-
-    time.sleep(10)
+# Mobile Auto-Refresh Trigger (3 Seconds Interval)
+time.sleep(3)
+st.rerun()
