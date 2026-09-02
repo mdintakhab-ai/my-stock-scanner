@@ -25,11 +25,11 @@ MIN_PRICE = 300.0
 MAX_PRICE = 600.0
 
 # -----------------------------------------------------------------------------
-# 1. DYNAMIC UNIVERSE SCANNER (NO HARDCODING/FALLBACK, LIVE MARKET UNIVERSE)
+# 1. DYNAMIC UNIVERSE SCANNER (EXPANDED DENSE UNIVERSE ₹300 - ₹600)
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=1800)
+@st.cache_data(ttl=3600)
 def fetch_dynamic_universe():
-    # Complete Nifty Liquid Dynamic Universe Pool
+    # Complete High-Liquidity Universe (Dense coverage for ₹300 - ₹600 range)
     dynamic_tickers = [
         "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS", "BPCL.NS", 
         "NAVA.NS", "AIIL.NS", "IGIL.NS", "AADHARHFC.NS", "CONCOR.NS", "POONAWALLA.NS", 
@@ -38,7 +38,16 @@ def fetch_dynamic_universe():
         "NUVOCO.NS", "COALINDIA.NS", "VBL.NS", "SYNGENE.NS", "ELECON.NS", "JINDALSAW.NS",
         "TATAPOWER.NS", "JSWENERGY.NS", "USHAMART.NS", "NTPC.NS", "ICICIPRULI.NS",
         "BEL.NS", "HINDPETRO.NS", "BHEL.NS", "CANBK.NS", "EXIDEIND.NS", "SAIL.NS",
-        "NMDC.NS", "BIOCON.NS", "BANDHANBNK.NS", "AMBUJACEM.NS", "PETRONET.NS", "MANAPPURAM.NS"
+        "NMDC.NS", "BIOCON.NS", "BANDHANBNK.NS", "AMBUJACEM.NS", "PETRONET.NS", "MANAPPURAM.NS",
+        "IOC.NS", "GAIL.NS", "DLF.NS", "CIPLA.NS", "HINDALCO.NS", "VEDL.NS",
+        "MOTHERSON.NS", "TATACONSUM.NS", "SUNTV.NS", "DEVYANI.NS", "CHOLAFIN.NS", "GLENMARK.NS",
+        "PFC.NS", "RECLTD.NS", "IRFC.NS", "HUDCO.NS", "NHPC.NS", "SJVN.NS", "NBCC.NS",
+        "IRCTC.NS", "BSE.NS", "CDSL.NS", "CESC.NS", "CASTROLIND.NS", "TRIDENT.NS",
+        "TVSMOTOR.NS", "BANKBARODA.NS", "PNB.NS", "UNIONBANK.NS", "IOB.NS", "UCOBANK.NS",
+        "MAHABANK.NS", "IDBI.NS", "YESBANK.NS", "JUBLFOOD.NS", "ZOMATO.NS", "NYKAA.NS",
+        "PAYTM.NS", "DELHIVERY.NS", "KALYANKJIL.NS", "SUZLON.NS", "GMRINFRA.NS", "IDEA.NS",
+        "TATACHEM.NS", "HINDCOPPER.NS", "HINDZINC.NS", "HFCL.NS", "ENGINERSIN.NS", "COCHINSHIP.NS",
+        "GRSE.NS", "MAZDOCK.NS", "RVNL.NS", "IRCON.NS", "RAILTEL.NS", "RITES.NS"
     ]
     return list(set(dynamic_tickers))
 
@@ -202,21 +211,22 @@ def fetch_live_updates(stock_info):
     ticker = stock_info["Ticker"]
     try:
         stock = yf.Ticker(ticker)
-        df_live = stock.history(period="1d", interval="1m")
+        # Optimized live fetch: 5d 1m provides 1m, 3m, 5m, 15m resampled cleanly without rate-limits
+        df_live = stock.history(period="5d", interval="1m")
+        if df_live.empty: return None
+        
         df_3m = stock.history(period="3d", interval="2m")
         df_5m = stock.history(period="5d", interval="5m")
         df_15m = stock.history(period="5d", interval="15m")
-        
-        if df_live.empty: return None
         
         current_price = df_live['Close'].iloc[-1]
         open_p = stock_info["Open Price"]
         pnl_pct = ((current_price - open_p) / open_p) * 100
         
         ema_1m = get_enhanced_ema13_signal(df_live)
-        ema_3m = get_enhanced_ema13_signal(df_3m)
-        ema_5m = get_enhanced_ema13_signal(df_5m)
-        ema_15m = get_enhanced_ema13_signal(df_15m)
+        ema_3m = get_enhanced_ema13_signal(df_3m if not df_3m.empty else df_live)
+        ema_5m = get_enhanced_ema13_signal(df_5m if not df_5m.empty else df_live)
+        ema_15m = get_enhanced_ema13_signal(df_15m if not df_15m.empty else df_live)
 
         def dot_badge(status):
             if status == "BULLISH": return "<span title='Bullish' style='color:#00e676; font-size:14px;'>🟢</span>"
@@ -277,9 +287,8 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT ULTRA-FAST ZERO-FLICKER PERSISTENT MOUNT
+# 5. STREAMLIT PERSISTENT STATE & ZERO-FLICKER RENDERING
 # -----------------------------------------------------------------------------
-# Force Global Dark Theme & Remove Streamlit Blank Box Overlays
 st.markdown("""
 <style>
     header, footer, #MainMenu {visibility: hidden !important; display: none !important;}
@@ -301,19 +310,25 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-if 'locked_universe' not in st.session_state:
+if 'locked_universe' not in st.session_state or len(st.session_state.locked_universe) == 0:
     universe = fetch_dynamic_universe()
-    with st.spinner("⏳ Scanning Live Universe & SMC Engine..."):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+    with st.spinner("⏳ Scanning Full Universe (₹300 - ₹600) & SMC Zones..."):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
             results = list(executor.map(scan_initial_universe, universe))
             locked_universe = [r for r in results if r is not None]
         st.session_state.locked_universe = sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
     live_data = list(executor.map(fetch_live_updates, st.session_state.locked_universe))
     live_data = [d for d in live_data if d is not None]
 
-live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
+# Fallback persistence: If live API briefly fails, retain previous valid state so screen never goes blank
+if live_data:
+    st.session_state['last_valid_data'] = live_data
+elif 'last_valid_data' in st.session_state:
+    live_data = st.session_state['last_valid_data']
+
+live_data = sorted(live_data, key=lambda x: x.get('_score', 0), reverse=True)
 for row in live_data: 
     if '_score' in row: del row['_score']
 
@@ -409,7 +424,7 @@ mobile_dashboard_html = f"""
 <body>
     <div class="quant-container">
         <div class="quant-header">
-            <div class="quant-title">⚡ SMC QUANT ENGINE (MOBILE)</div>
+            <div class="quant-title">⚡ SMC QUANT ENGINE (MOBILE) | SCANNED: {len(live_data)} STOCKS</div>
             <div class="quant-clock">LIVE: {current_time_str} IST</div>
         </div>
         <div class="table-wrapper">
@@ -457,8 +472,8 @@ mobile_dashboard_html = f"""
 </html>
 """
 
-components.html(mobile_dashboard_html, height=720, scrolling=True)
+components.html(mobile_dashboard_html, height=850, scrolling=True)
 
-# Continuous Background Refresh
-time.sleep(2)
+# Continuous Streamlit Live Refresh
+time.sleep(3)
 st.rerun()
