@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
-import streamlit.components.v1 as components
 
 warnings.filterwarnings('ignore')
 
@@ -21,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Deep Dark Theme Fix - Eliminates White Screen Blinking completely
+# Zero-Flicker Native Dark Styling
 st.markdown("""
 <style>
 html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"], 
@@ -29,11 +28,6 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"],
     background-color: #090c10 !important;
     background: #090c10 !important;
     color: #ffffff !important;
-}
-.stApp > div, [data-testid="stAppViewContainer"] > .main {
-    opacity: 1 !important;
-    filter: none !important;
-    transition: none !important;
 }
 header, footer, #MainMenu, 
 div[data-testid="stStatusWidget"], 
@@ -43,14 +37,71 @@ div[data-testid="stDecoration"] {
     visibility: hidden !important;
 }
 .block-container {
-    padding: 0rem !important;
+    padding: 0.2rem !important;
     max-width: 100% !important;
 }
-iframe {
-    width: 100% !important;
-    border: none !important;
-    background-color: #090c10 !important;
-    color-scheme: dark !important;
+.quant-container {
+    background-color: #090c10;
+    border: 1px solid #1f293d;
+    border-radius: 8px;
+    padding: 10px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #ffffff !important;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.quant-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1f293d;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+}
+.quant-title {
+    color: #00e676;
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+}
+.quant-clock {
+    color: #8b949e;
+    font-size: 11px;
+    background: #161b22;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+}
+.quant-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    white-space: nowrap;
+}
+.quant-table th {
+    background-color: #161b22;
+    color: #8b949e;
+    text-align: center;
+    padding: 8px 6px;
+    border-bottom: 2px solid #21262d;
+    font-size: 10px;
+    text-transform: uppercase;
+}
+.quant-table td {
+    padding: 8px 6px;
+    border-bottom: 1px solid #161b22;
+    color: #ffffff !important;
+    font-weight: 600;
+    text-align: center;
+    vertical-align: middle;
+}
+.quant-table tr:nth-child(even) { background-color: #0d1117; }
+.quant-table tr:nth-child(odd) { background-color: #090c10; }
+.symbol-text {
+    color: #ffffff !important;
+    font-weight: 800;
+    font-size: 13px;
+    text-align: left !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -272,13 +323,7 @@ def fetch_live_updates(stock_info):
         if supply_pressure_pct > 75.0:
             retest_alert = f"<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST REJECTION</div>"
 
-        pressure_box_html = f"""
-        <div style='border: 1.5px solid {border_color}; background-color: {bg_color}; padding: 4px 6px; border-radius: 5px; text-align: center;'>
-            <div style='font-size: 10px; font-weight: 800; color: {border_color};'>{status_txt}</div>
-            <div style='font-size: 12px; font-weight: 900; color: #ffffff;'>{supply_pressure_pct:.1f}%</div>
-            {retest_alert}
-        </div>
-        """
+        pressure_box_html = f"""<div style='border: 1.5px solid {border_color}; background-color: {bg_color}; padding: 4px 6px; border-radius: 5px; text-align: center;'><div style='font-size: 10px; font-weight: 800; color: {border_color};'>{status_txt}</div><div style='font-size: 12px; font-weight: 900; color: #ffffff;'>{supply_pressure_pct:.1f}%</div>{retest_alert}</div>"""
 
         tcs_score = calculate_trade_clearance_score(
             df_live, stock_info["df_1d"], open_p, current_price, stock_info["Score"], supply_pressure_pct
@@ -307,112 +352,52 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. ZERO-FLICKER DASHBOARD RENDERER (Mobile & Desktop Full Responsive)
+# 5. STREAMLIT FRAGMENT ENGINE (Zero Jhatka / No Blinking)
 # -----------------------------------------------------------------------------
 @st.cache_resource(show_spinner=False)
-def get_initial_locked_universe():
+def get_locked_universe():
     universe = fetch_dynamic_universe()
     with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
         results = list(executor.map(scan_initial_universe, universe))
         locked = [r for r in results if r is not None]
     return sorted(locked, key=lambda x: x['Score'], reverse=True)
 
-locked_universe = get_initial_locked_universe()
+locked_universe = get_locked_universe()
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
-    live_data = list(executor.map(fetch_live_updates, locked_universe))
-    live_data = [d for d in live_data if d is not None]
+# Fragment block updates table natively in DOM without reloading Streamlit page
+@st.fragment(run_every=3)
+def render_live_quant_stream():
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as executor:
+        live_data = list(executor.map(fetch_live_updates, locked_universe))
+        live_data = [d for d in live_data if d is not None]
 
-live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
-for row in live_data:
-    del row['_score']
+    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
+    for row in live_data:
+        del row['_score']
 
-payload = {
-    "timestamp": datetime.datetime.now().strftime('%H:%M:%S'),
-    "data": live_data
-}
+    cur_time = datetime.datetime.now().strftime('%H:%M:%S')
 
-base_html = f"""
-<!DOCTYPE html>
-<html style="background-color: #090c10;">
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<style>
-    html, body {{
-        background-color: #090c10 !important;
-        margin: 0;
-        padding: 6px;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-        color: #ffffff !important;
-    }}
-    .quant-container {{
-        background-color: #090c10;
-        border: 1px solid #1f293d;
-        border-radius: 8px;
-        padding: 10px;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-    }}
-    .quant-header {{
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        border-bottom: 1px solid #1f293d;
-        padding-bottom: 8px;
-        margin-bottom: 10px;
-    }}
-    .quant-title {{
-        color: #00e676;
-        font-size: 14px;
-        font-weight: 800;
-        letter-spacing: 0.5px;
-    }}
-    .quant-clock {{
-        color: #8b949e;
-        font-size: 11px;
-        background: #161b22;
-        padding: 4px 8px;
-        border-radius: 4px;
-        white-space: nowrap;
-    }}
-    .quant-table {{
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-        white-space: nowrap;
-    }}
-    .quant-table th {{
-        background-color: #161b22;
-        color: #8b949e;
-        text-align: center;
-        padding: 8px 6px;
-        border-bottom: 2px solid #21262d;
-        font-size: 10px;
-        text-transform: uppercase;
-    }}
-    .quant-table td {{
-        padding: 8px 6px;
-        border-bottom: 1px solid #161b22;
-        color: #ffffff !important;
-        font-weight: 600;
-        text-align: center;
-        vertical-align: middle;
-    }}
-    .quant-table tr:nth-child(even) {{ background-color: #0d1117; }}
-    .quant-table tr:nth-child(odd) {{ background-color: #090c10; }}
-    .symbol-text {{
-        color: #ffffff !important;
-        font-weight: 800;
-        font-size: 13px;
-        text-align: left !important;
-    }}
-</style>
-</head>
-<body>
+    table_rows_html = "".join([
+        f"<tr>"
+        f"<td class='symbol-text'>{r['symbol']}</td>"
+        f"<td style='text-align:left;'>{r['zones']}</td>"
+        f"<td>{r['open']}</td>"
+        f"<td>{r['ltp']}</td>"
+        f"<td>{r['change']}</td>"
+        f"<td>{r['ema1m']} {r['ema3m']} {r['ema5m']} {r['ema15m']}</td>"
+        f"<td>{r['pressure_box']}</td>"
+        f"<td>{r['target']}</td>"
+        f"<td>{r['tcs']}</td>"
+        f"<td>{r['cobi']}</td>"
+        f"</tr>"
+        for r in live_data
+    ])
+
+    dashboard_html = f"""
     <div class="quant-container">
         <div class="quant-header">
             <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
-            <div id="quant-clock-val" class="quant-clock">LIVE STREAM: {payload['timestamp']} IST</div>
+            <div class="quant-clock">LIVE STREAM: {cur_time} IST</div>
         </div>
         <table class="quant-table">
             <thead>
@@ -429,37 +414,13 @@ base_html = f"""
                     <th>Buyer/Seller (COBI)</th>
                 </tr>
             </thead>
-            <tbody id="quant-table-body"></tbody>
+            <tbody>
+                {table_rows_html}
+            </tbody>
         </table>
     </div>
+    """
+    st.markdown(dashboard_html, unsafe_allow_html=True)
 
-    <script>
-        const payload = {json.dumps(payload)};
-        document.getElementById('quant-clock-val').innerText = 'LIVE STREAM: ' + payload.timestamp + ' IST';
-        const tbody = document.getElementById('quant-table-body');
-        let html = '';
-        payload.data.forEach(row => {{
-            html += `<tr>
-                <td class="symbol-text">${{row.symbol}}</td>
-                <td style="text-align:left;">${{row.zones}}</td>
-                <td>${{row.open}}</td>
-                <td>${{row.ltp}}</td>
-                <td>${{row.change}}</td>
-                <td>${{row.ema1m}} ${{row.ema3m}} ${{row.ema5m}} ${{row.ema15m}}</td>
-                <td>${{row.pressure_box}}</td>
-                <td>${{row.target}}</td>
-                <td>${{row.tcs}}</td>
-                <td>${{row.cobi}}</td>
-            </tr>`;
-        }});
-        tbody.innerHTML = html;
-    </script>
-</body>
-</html>
-"""
-
-components.html(base_html, height=750, scrolling=True)
-
-# 0-delay auto sync loop
-time.sleep(3)
-st.rerun()
+# Run Live Stream Fragment
+render_live_quant_stream()
