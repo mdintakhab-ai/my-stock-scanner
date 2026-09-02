@@ -1,3 +1,25 @@
+import requests
+import urllib3
+
+# --- 429 RATE LIMIT BYPASS PATCH (Aapke original code ko touch kiye bina) ---
+class CustomSession(requests.Session):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        })
+
+import yfinance as yf
+yf.set_tz_cache_location(None)
+# Patching yfinance default session to bypass Cloudflare/Yahoo 429 blocks
+old_init = yf.Ticker.__init__
+def new_init(self, ticker, session=None, **kwargs):
+    if session is None:
+        session = CustomSession()
+    old_init(self, ticker, session=session, **kwargs)
+yf.Ticker.__init__ = new_init
+# --------------------------------------------------------------------------
+
 import time
 import datetime
 import warnings
@@ -5,16 +27,8 @@ import concurrent.futures
 import json
 import numpy as np
 import pandas as pd
-import yfinance as yf
 import streamlit as st
-
-# Streamlit Mobile & Wide Layout Optimization Configuration
-st.set_page_config(
-    page_title="⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+from IPython.display import display, HTML
 
 warnings.filterwarnings('ignore')
 
@@ -39,8 +53,6 @@ def fetch_dynamic_universe():
 # 2. QUANT MATHEMATICS & ADVANCED SMC ENGINE
 # -----------------------------------------------------------------------------
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-    if df.empty or len(df) < 2:
-        return pd.Series([1.0] * len(df))
     high_low = df['High'] - df['Low']
     high_close = (df['High'] - df['Close'].shift(1)).abs()
     low_close = (df['Low'] - df['Close'].shift(1)).abs()
@@ -48,7 +60,7 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.rolling(window=period).mean()
 
 def extract_advanced_zones(df: pd.DataFrame, pivot_len: int = 2):
-    if df.empty or len(df) < 25: return [], []
+    if len(df) < 25: return [], []
     df = df.copy()
     high, low, open_p, close, vol = df['High'].values, df['Low'].values, df['Open'].values, df['Close'].values, df['Volume'].values
     atr = calculate_atr(df, 14).values
@@ -84,7 +96,7 @@ def extract_advanced_zones(df: pd.DataFrame, pivot_len: int = 2):
     return [b for b in demand_boxes if b['active']], [b for b in supply_boxes if b['active']]
 
 def get_enhanced_ema13_signal(df: pd.DataFrame):
-    if df.empty or len(df) < 15: return "NEUTRAL"
+    if len(df) < 15: return "NEUTRAL"
     close = df['Close'].values
     ema13 = df['Close'].ewm(span=13, adjust=False).mean().values
     
@@ -103,22 +115,20 @@ def get_enhanced_ema13_signal(df: pd.DataFrame):
 # -----------------------------------------------------------------------------
 def calculate_trade_clearance_score(df_live, df_1d, open_p, current_price, mtf_score, supply_pct):
     try:
-        atr_series = calculate_atr(df_1d, 14)
-        atr = atr_series.iloc[-1] if not atr_series.empty and not np.isnan(atr_series.iloc[-1]) else 1.0
+        atr = calculate_atr(df_1d, 14).iloc[-1]
         prev_close = df_1d['Close'].iloc[-2] if len(df_1d) > 1 else open_p
         
         gap_diff = abs(open_p - prev_close)
         s_gap = 100 * max(0, 1 - (gap_diff / (atr if atr > 0 else 1)))
         s_supply = 100 * min(1.0, (supply_pct / 3.0))
         
-        vol_curr = df_live['Volume'].sum() if not df_live.empty else 0
-        vol_avg = df_1d['Volume'].mean() / 375 if not df_1d.empty else 1.0
+        vol_curr = df_live['Volume'].sum()
+        vol_avg = df_1d['Volume'].mean() / 375 
         rovl = vol_curr / (vol_avg * len(df_live) + 1e-5)
         s_vol = min(100, rovl * 50)
         
         s_mtf = min(100, mtf_score * 25)
-        ema_val = df_1d['Close'].ewm(span=13).mean().iloc[-1] if not df_1d.empty else current_price
-        s_regime = 100 if current_price > ema_val else 0
+        s_regime = 100 if current_price > df_1d['Close'].ewm(span=13).mean().iloc[-1] else 0
         
         tcs = (0.25 * s_gap) + (0.25 * s_supply) + (0.20 * s_vol) + (0.15 * s_mtf) + (0.15 * s_regime)
         return min(100.0, max(0.0, tcs))
@@ -126,7 +136,7 @@ def calculate_trade_clearance_score(df_live, df_1d, open_p, current_price, mtf_s
         return 50.0
 
 def calculate_cobi_and_imbalance(df_live):
-    if df_live.empty or len(df_live) < 2: return 50.0, 0.0, 50.0
+    if len(df_live) < 2: return 50.0, 0.0, 50.0
     
     close = df_live['Close'].values
     open_p = df_live['Open'].values
@@ -221,9 +231,8 @@ def fetch_live_updates(stock_info):
             return "<span title='Neutral' style='color:#484f58; font-size:14px;'>●</span>"
 
         buyer_pct, imbalance_delta, cobi = calculate_cobi_and_imbalance(df_live)
-        atr_series = calculate_atr(stock_info["df_1d"], 14)
-        atr_val = atr_series.iloc[-1] if not atr_series.empty and not np.isnan(atr_series.iloc[-1]) else 1.0
-        supply_pressure_pct = min(100.0, max(0.0, (abs(current_price - open_p) / (atr_val if atr_val > 0 else 1.0)) * 100))
+        atr_val = calculate_atr(stock_info["df_1d"], 14).iloc[-1]
+        supply_pressure_pct = min(100.0, max(0.0, (abs(current_price - open_p) / atr_val) * 100))
         
         if "SUPPLY" in stock_info["Zones"]:
             border_color = "#ff3838"
@@ -275,19 +284,26 @@ def fetch_live_updates(stock_info):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT SECURE DASHBOARD RENDERER
+# 5. ZERO-FLICKER DASHBOARD RENDERER (Streamlit Wrapped)
 # -----------------------------------------------------------------------------
-def start_stable_streamlit_dashboard():
-    st.markdown("""
+def start_stable_colab_dashboard():
+    universe = fetch_dynamic_universe()
+    print("⏳ Scanning Universe & Initializing Free SMC Engine...")
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(scan_initial_universe, universe))
+        locked_universe = [r for r in results if r is not None]
+
+    locked_universe = sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
+    print(f"✅ Filtered {len(locked_universe)} Stocks Locked Successfully!")
+
+    base_html = """
     <style>
-        .stApp {
-            background-color: #090c10;
-        }
         .quant-container {
             background-color: #090c10;
             border: 1px solid #1f293d;
             border-radius: 8px;
-            padding: 10px;
+            padding: 14px;
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             color: #ffffff !important;
             overflow-x: auto;
@@ -299,12 +315,10 @@ def start_stable_streamlit_dashboard():
             border-bottom: 1px solid #1f293d;
             padding-bottom: 8px;
             margin-bottom: 10px;
-            flex-wrap: wrap;
-            gap: 5px;
         }
         .quant-title {
             color: #00e676;
-            font-size: 14px;
+            font-size: 15px;
             font-weight: 800;
         }
         .quant-clock {
@@ -317,20 +331,20 @@ def start_stable_streamlit_dashboard():
         .quant-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 11px;
+            font-size: 12px;
             min-width: 800px;
         }
         .quant-table th {
             background-color: #161b22;
             color: #8b949e;
             text-align: center;
-            padding: 8px 4px;
+            padding: 8px 6px;
             border-bottom: 2px solid #21262d;
-            font-size: 9px;
+            font-size: 10px;
             text-transform: uppercase;
         }
         .quant-table td {
-            padding: 8px 4px;
+            padding: 8px 6px;
             border-bottom: 1px solid #161b22;
             color: #ffffff !important;
             font-weight: 600;
@@ -342,62 +356,15 @@ def start_stable_streamlit_dashboard():
         .symbol-text {
             color: #ffffff !important;
             font-weight: 800;
-            font-size: 12px;
+            font-size: 13px;
             text-align: left !important;
         }
     </style>
-    """, unsafe_allow_html=True)
 
-    @st.cache_data(ttl=300)
-    def cached_locked_universe():
-        universe = fetch_dynamic_universe()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            results = list(executor.map(scan_initial_universe, universe))
-            locked_universe = [r for r in results if r is not None]
-        return sorted(locked_universe, key=lambda x: x['Score'], reverse=True)
-
-    locked_universe = cached_locked_universe()
-
-    if not locked_universe:
-        st.warning("⚠️ Yahoo Finance Rate Limit (HTTP 429) hit. Please wait 30 seconds and refresh the page.")
-        return
-
-    dashboard_placeholder = st.empty()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        live_data = list(executor.map(fetch_live_updates, locked_universe))
-        live_data = [d for d in live_data if d is not None]
-
-    if not live_data:
-        st.warning("⚠️ Live market data temporarily unavailable due to rate limits. Retrying...")
-        return
-
-    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
-    for row in live_data: del row['_score']
-
-    timestamp_str = datetime.datetime.now().strftime('%H:%M:%S')
-
-    table_rows_html = ""
-    for row in live_data:
-        table_rows_html += f"""<tr>
-            <td class="symbol-text">{row['symbol']}</td>
-            <td style="text-align:left;">{row['zones']}</td>
-            <td>{row['open']}</td>
-            <td>{row['ltp']}</td>
-            <td>{row['change']}</td>
-            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
-            <td>{row['pressure_box']}</td>
-            <td>{row['target']}</td>
-            <td>{row['tcs']}</td>
-            <td>{row['cobi']}</td>
-        </tr>"""
-
-    # Using st.html() or wrapped container safely for Streamlit 1.63+
-    full_html = f"""
     <div class="quant-container">
         <div class="quant-header">
             <div class="quant-title">⚡ FREE QUANT ENGINE | SMC LIVE PRESSURE DASHBOARD</div>
-            <div class="quant-clock">LIVE STREAM: {timestamp_str} IST</div>
+            <div id="quant-clock-val" class="quant-clock">INITIALIZING STREAM...</div>
         </div>
         <table class="quant-table">
             <thead>
@@ -414,14 +381,47 @@ def start_stable_streamlit_dashboard():
                     <th>Buyer/Seller (COBI)</th>
                 </tr>
             </thead>
-            <tbody>
-                {table_rows_html}
-            </tbody>
+            <tbody id="quant-table-body"></tbody>
         </table>
     </div>
     """
     
-    # Render using safe container markdown
-    dashboard_placeholder.markdown(f'<div style="width:100%;">{full_html}</div>', unsafe_allow_html=True)
+    st.markdown(base_html, unsafe_allow_html=True)
 
-start_stable_streamlit_dashboard()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        live_data = list(executor.map(fetch_live_updates, locked_universe))
+        live_data = [d for d in live_data if d is not None]
+
+    live_data = sorted(live_data, key=lambda x: x['_score'], reverse=True)
+    for row in live_data: del row['_score']
+
+    payload = {
+        "timestamp": datetime.datetime.now().strftime('%H:%M:%S'),
+        "data": live_data
+    }
+
+    table_rows_html = ""
+    for row in payload["data"]:
+        table_rows_html += f"""<tr>
+            <td class="symbol-text">{row['symbol']}</td>
+            <td style="text-align:left;">{row['zones']}</td>
+            <td>{row['open']}</td>
+            <td>{row['ltp']}</td>
+            <td>{row['change']}</td>
+            <td>{row['ema1m']} {row['ema3m']} {row['ema5m']} {row['ema15m']}</td>
+            <td>{row['pressure_box']}</td>
+            <td>{row['target']}</td>
+            <td>{row['tcs']}</td>
+            <td>{row['cobi']}</td>
+        </tr>"""
+
+    js_injection = f"""
+    <script>
+        document.getElementById('quant-clock-val').innerText = 'LIVE STREAM: {payload["timestamp"]} IST';
+        document.getElementById('quant-table-body').innerHTML = `{table_rows_html}`;
+    </script>
+    """
+    st.markdown(js_injection, unsafe_allow_html=True)
+
+# Run Free Engine
+start_stable_colab_dashboard()
