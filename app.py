@@ -32,6 +32,7 @@ HIGH_CONVICTION_TCS_THRESHOLD = 30
 MIN_RUNWAY_PERCENT = 0.8
 MAX_LOCKED_STOCKS = 7
 
+# Throttling se bachne ke liye tickers ko chhota karke 5-10 kar sakte hain, filhal saare rakhe hain
 STREAM_TICKERS = [
     "FEDERALBNK.NS", "CONCOR.NS", "JINDALSAW.NS", "SYNGENE.NS", "RELAXO.NS",
     "JSWENERGY.NS", "NUVOCO.NS", "BPCL.NS", "LICHSGFIN.NS", "HINDPETRO.NS",
@@ -126,7 +127,7 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, current_dir
         
     return round(cri, 2), status, action
 
-@st.cache_data(ttl=20, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_all_data():
     try:
         data = yf.download(STREAM_TICKERS, period="1d", interval="1m", group_by="ticker", auto_adjust=True, progress=False)
@@ -378,5 +379,6 @@ now_time = datetime.datetime.now().strftime('%H:%M:%S')
 html_output = build_html_view(display_rows, now_time, elapsed_ms, len(STREAM_TICKERS), st.session_state.is_universe_locked)
 components.html(html_output, height=520, scrolling=True)
 
-time.sleep(15)
-st.rerun()
+# Throttling rokne ke liye manual refresh button diya gaya hai taaki server ban na kare
+if st.button("🔄 Refresh Data"):
+    st.rerun()
