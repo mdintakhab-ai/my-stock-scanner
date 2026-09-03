@@ -136,7 +136,7 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, current_dir
     return round(cri, 2), status, action
 
 # -----------------------------------------------------------------------------
-# 3. BULK CACHED DATA PARSER (PREVENTS THROTTLING)
+# 3. BULK CACHED DATA PARSER
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=20, show_spinner=False)
 def fetch_all_data():
@@ -322,7 +322,7 @@ if all_data is not None and not all_data.empty:
             """
             
             cri_val, cri_status, cri_action = compute_bidirectional_cri(
-                df, ltp, target_price, atr_val, current_direction=direction, span_bars=5
+                df, ltp, target_zone_price, atr_val, current_direction=direction, span_bars=5
             )
             
             if cri_val >= 80.0:
