@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 import streamlit as st
+import streamlit.components.v1 as components
 
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
@@ -125,7 +126,7 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, current_dir
         
     return round(cri, 2), status, action
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=20, show_spinner=False)
 def fetch_ticker_data_instant(symbol):
     try:
         t = yf.Ticker(symbol)
@@ -372,8 +373,9 @@ elapsed_ms = int((time.time() - t0) * 1000)
 now_time = datetime.datetime.now().strftime('%H:%M:%S')
 
 html_output = build_html_view(display_rows, now_time, elapsed_ms, len(STREAM_TICKERS), st.session_state.is_universe_locked)
-st.markdown(html_output, unsafe_allow_html=True)
 
-# Safe 30 second interval refresh to ensure zero throttling
-time.sleep(30)
+# Fixed: Use components.html to render the raw HTML as a live formatted UI dashboard instead of printing raw strings
+components.html(html_output, height=520, scrolling=True)
+
+time.sleep(20)
 st.rerun()
