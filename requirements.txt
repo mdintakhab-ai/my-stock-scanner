@@ -1,5 +1,4 @@
---only-binary=:all:
-numpy==1.26.4
-pandas==2.2.1
-yfinance==0.2.36
-streamlit==1.32.0
+streamlit
+pandas
+numpy
+yfinance
