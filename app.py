@@ -7,11 +7,9 @@ import pandas as pd
 import yfinance as yf
 import streamlit as st
 
-# Suppress background logs and warnings
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
-# Streamlit Mobile & Desktop Configuration
 st.set_page_config(
     page_title="Falcon Quant SMC Terminal",
     page_icon="⚡",
@@ -19,16 +17,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Clean Dark CSS
 st.markdown("""
 <style>
     .stApp { background-color: #090c10; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 1. HARD CONFIGURATION & UNIVERSE DUAL-RANGE
-# -----------------------------------------------------------------------------
 MIN_PRICE = 100.0
 MAX_PRICE = 1500.0
 DASHBOARD_MIN_PRICE = 300.0
@@ -46,9 +40,6 @@ STREAM_TICKERS = [
     "USHAMART.NS", "BEL.NS", "IOC.NS", "SAIL.NS", "NMDC.NS"
 ]
 
-# -----------------------------------------------------------------------------
-# 2. NUMPY QUANT MATH & TRUE SMC ENGINE
-# -----------------------------------------------------------------------------
 def fast_atr(high, low, close, period=14):
     if len(close) < 2: return 5.0
     tr0 = high[1:] - low[1:]
@@ -134,10 +125,7 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, current_dir
         
     return round(cri, 2), status, action
 
-# -----------------------------------------------------------------------------
-# 3. DIRECT DATA PARSER (CACHED TO PREVENT THROTTLING)
-# -----------------------------------------------------------------------------
-@st.cache_data(ttl=10, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def fetch_ticker_data_instant(symbol):
     try:
         t = yf.Ticker(symbol)
@@ -148,9 +136,6 @@ def fetch_ticker_data_instant(symbol):
         pass
     return None
 
-# -----------------------------------------------------------------------------
-# 4. DASHBOARD RENDERER & BALANCED RESPONSIVE UI
-# -----------------------------------------------------------------------------
 def build_html_view(rows, timestamp, latency_ms, total_scanned, is_locked=False):
     rows_str = ""
     lock_badge = "<span style='color:#00e676; font-weight:bold;'>🔒 UNIVERSE LOCKED (ALPHA FREEZE)</span>" if is_locked else "<span style='color:#ffaa00; font-weight:bold;'>⚡ STREAMING QUANT DESK...</span>"
@@ -217,9 +202,6 @@ def build_html_view(rows, timestamp, latency_ms, total_scanned, is_locked=False)
     </div>
     """
 
-# -----------------------------------------------------------------------------
-# 5. STREAMLIT SAFE NON-THROTTLED EXECUTION ENGINE
-# -----------------------------------------------------------------------------
 if 'locked_symbols' not in st.session_state:
     st.session_state.locked_symbols = None
 if 'is_universe_locked' not in st.session_state:
@@ -318,7 +300,7 @@ for ticker in STREAM_TICKERS:
         """
         
         cri_val, cri_status, cri_action = compute_bidirectional_cri(
-            df, ltp, target_price, atr_val, current_direction=direction, span_bars=5
+            df, ltp, target_zone_price, atr_val, current_direction=direction, span_bars=5
         )
         
         if cri_val >= 80.0:
@@ -392,6 +374,6 @@ now_time = datetime.datetime.now().strftime('%H:%M:%S')
 html_output = build_html_view(display_rows, now_time, elapsed_ms, len(STREAM_TICKERS), st.session_state.is_universe_locked)
 st.markdown(html_output, unsafe_allow_html=True)
 
-# Streamlit native non-blocking auto refresh mechanism (Every 15 seconds to prevent throttling)
-time.sleep(15)
+# Safe 30 second interval refresh to ensure zero throttling
+time.sleep(30)
 st.rerun()
