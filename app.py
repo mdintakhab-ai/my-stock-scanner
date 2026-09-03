@@ -8,11 +8,9 @@ import yfinance as yf
 import streamlit as st
 import streamlit.components.v1 as components
 
-# Suppress background logs and warnings
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
-# Streamlit Mobile & Desktop Configuration
 st.set_page_config(
     page_title="Falcon Quant SMC Terminal",
     page_icon="⚡",
@@ -20,16 +18,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Clean Dark CSS
 st.markdown("""
 <style>
     .stApp { background-color: #090c10; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; }
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------------------------------------------------------------
-# 1. HARD CONFIGURATION & UNIVERSE DUAL-RANGE
-# -----------------------------------------------------------------------------
 MIN_PRICE = 100.0
 MAX_PRICE = 1500.0
 DASHBOARD_MIN_PRICE = 300.0
@@ -47,9 +41,6 @@ STREAM_TICKERS = [
     "USHAMART.NS", "BEL.NS", "IOC.NS", "SAIL.NS", "NMDC.NS"
 ]
 
-# -----------------------------------------------------------------------------
-# 2. NUMPY QUANT MATH & TRUE SMC ENGINE
-# -----------------------------------------------------------------------------
 def fast_atr(high, low, close, period=14):
     if len(close) < 2: return 5.0
     tr0 = high[1:] - low[1:]
@@ -135,9 +126,6 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, current_dir
         
     return round(cri, 2), status, action
 
-# -----------------------------------------------------------------------------
-# 3. BULK CACHED DATA PARSER
-# -----------------------------------------------------------------------------
 @st.cache_data(ttl=20, show_spinner=False)
 def fetch_all_data():
     try:
@@ -146,9 +134,6 @@ def fetch_all_data():
     except Exception:
         return None
 
-# -----------------------------------------------------------------------------
-# 4. DASHBOARD RENDERER & BALANCED RESPONSIVE UI
-# -----------------------------------------------------------------------------
 def build_html_view(rows, timestamp, latency_ms, total_scanned, is_locked=False):
     rows_str = ""
     lock_badge = "<span style='color:#00e676; font-weight:bold;'>🔒 UNIVERSE LOCKED (ALPHA FREEZE)</span>" if is_locked else "<span style='color:#ffaa00; font-weight:bold;'>⚡ STREAMING QUANT DESK...</span>"
@@ -215,9 +200,6 @@ def build_html_view(rows, timestamp, latency_ms, total_scanned, is_locked=False)
     </div>
     """
 
-# -----------------------------------------------------------------------------
-# 5. EXECUTION ENGINE
-# -----------------------------------------------------------------------------
 if 'locked_symbols' not in st.session_state:
     st.session_state.locked_symbols = None
 if 'is_universe_locked' not in st.session_state:
