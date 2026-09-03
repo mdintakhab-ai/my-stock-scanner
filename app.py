@@ -11,7 +11,7 @@ import streamlit as st
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
-# Streamlit Mobile & Desktop Configuration (Wide & Clean)
+# Streamlit Mobile & Desktop Configuration
 st.set_page_config(
     page_title="Falcon Quant SMC Terminal",
     page_icon="⚡",
@@ -19,11 +19,10 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom Zero-Blink Dark CSS
+# Custom Clean Dark CSS
 st.markdown("""
 <style>
     .stApp { background-color: #090c10; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; }
-    iframe { background-color: #090c10 !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -136,8 +135,9 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, current_dir
     return round(cri, 2), status, action
 
 # -----------------------------------------------------------------------------
-# 3. DIRECT DATA PARSER
+# 3. DIRECT DATA PARSER (CACHED TO PREVENT THROTTLING)
 # -----------------------------------------------------------------------------
+@st.cache_data(ttl=10, show_spinner=False)
 def fetch_ticker_data_instant(symbol):
     try:
         t = yf.Ticker(symbol)
@@ -218,182 +218,180 @@ def build_html_view(rows, timestamp, latency_ms, total_scanned, is_locked=False)
     """
 
 # -----------------------------------------------------------------------------
-# 5. ZERO-BLINK LIVE EXECUTION ENGINE
+# 5. STREAMLIT SAFE NON-THROTTLED EXECUTION ENGINE
 # -----------------------------------------------------------------------------
 if 'locked_symbols' not in st.session_state:
     st.session_state.locked_symbols = None
 if 'is_universe_locked' not in st.session_state:
     st.session_state.is_universe_locked = False
 
-terminal_slot = st.empty()
+t0 = time.time()
+current_rows = []
 
-while True:
-    t0 = time.time()
-    current_rows = []
+for ticker in STREAM_TICKERS:
+    df = fetch_ticker_data_instant(ticker)
+    if df is None or df.empty or len(df) < 3:
+        continue
     
-    for ticker in STREAM_TICKERS:
-        df = fetch_ticker_data_instant(ticker)
-        if df is None or df.empty or len(df) < 3:
+    try:
+        close = df['Close'].to_numpy(dtype=float)
+        high = df['High'].to_numpy(dtype=float)
+        low = df['Low'].to_numpy(dtype=float)
+        open_arr = df['Open'].to_numpy(dtype=float)
+        vol = df['Volume'].to_numpy(dtype=float)
+        
+        open_p = float(open_arr[0])
+        ltp = float(close[-1])
+        day_high = float(np.max(high))
+        day_low = float(np.min(low))
+        
+        if not (MIN_PRICE <= open_p <= MAX_PRICE): 
             continue
         
-        try:
-            close = df['Close'].to_numpy(dtype=float)
-            high = df['High'].to_numpy(dtype=float)
-            low = df['Low'].to_numpy(dtype=float)
-            open_arr = df['Open'].to_numpy(dtype=float)
-            vol = df['Volume'].to_numpy(dtype=float)
-            
-            open_p = float(open_arr[0])
-            ltp = float(close[-1])
-            day_high = float(np.max(high))
-            day_low = float(np.min(low))
-            
-            if not (MIN_PRICE <= open_p <= MAX_PRICE): 
-                continue
-            
-            atr_val = fast_atr(high, low, close, 14)
-            pnl_pct = ((ltp - open_p) / open_p) * 100.0
-            direction = "DEMAND" if ltp >= open_p else "SUPPLY"
-            
-            if direction == "SUPPLY":
-                target_price = ltp - max(atr_val * 1.2, ltp * 0.012)
-                sl_best_entry = max(day_high, open_p + max(0.35 * atr_val, ltp * 0.004))
-                sl_border_color = "#ff7675"
-                sl_bg_color = "rgba(255, 118, 117, 0.12)"
-                sl_title = "SELL ENTRY / SL"
-                zone_html = "<span style='color:#ff5252; font-weight:700;'>SUPPLY (15m)</span><br><span style='color:#ff7675; font-size:8.5px;'>SUPPLY (1D)</span>"
-            else:
-                target_price = ltp + max(atr_val * 1.2, ltp * 0.012)
-                sl_best_entry = min(day_low, open_p - max(0.35 * atr_val, ltp * 0.004))
-                sl_border_color = "#55efc4"
-                sl_bg_color = "rgba(85, 239, 196, 0.12)"
-                sl_title = "BUY ENTRY / SL"
-                zone_html = "<span style='color:#00e676; font-weight:700;'>DEMAND (15m)</span><br><span style='color:#55efc4; font-size:8.5px;'>DEMAND (1D)</span>"
-            
-            runway_gap = abs(target_price - ltp)
-            runway_pct = (runway_gap / ltp) * 100.0
-            if runway_pct < MIN_RUNWAY_PERCENT or runway_gap < 1.0:
-                continue
-            
-            sl_box_html = f"""
-            <div style='border: 1px dashed {sl_border_color}; background-color: {sl_bg_color}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
-                <div style='font-size: 8.5px; font-weight: 800; color: {sl_border_color}; white-space: nowrap;'>{sl_title}</div>
-                <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>Rs {sl_best_entry:.2f}</div>
-            </div>
-            """
-            
-            tp = (high + low + close) / 3.0
-            cum_vol = np.sum(vol) + 1e-6
-            vwap = float(np.sum(tp * vol) / cum_vol)
-            rsi = fast_rsi(close, 14)
-            
-            ema1 = fast_ema(close[-15:], 13)
-            ema3 = fast_ema(close[-45::3], 13) if len(close) >= 40 else ema1
-            ema5 = fast_ema(close[-75::5], 13) if len(close) >= 65 else ema1
-            ema15 = fast_ema(close[-225::15], 13) if len(close) >= 150 else ema1
-            
-            bull_cnt = sum([ltp > ema1, ltp > ema3, ltp > ema5, ltp > ema15])
-            bear_cnt = 4 - bull_cnt
-            
-            bar_range = (high - low) + 1e-6
-            buy_power = np.sum(vol * ((close - low) / bar_range))
-            sell_power = np.sum(vol * ((high - close) / bar_range))
-            tot_power = buy_power + sell_power + 1e-6
-            
-            buy_pct = (buy_power / tot_power) * 100.0
-            imbalance_pct = ((buy_power - sell_power) / tot_power) * 100.0
-            cobi_html = f"{buy_pct:.0f}% Buy ({imbalance_pct:+.1f}%)"
-            
-            directional_move = (ltp - open_p) if direction == 'DEMAND' else (open_p - ltp)
-            pressure_pct = min(100.0, max(0.0, (directional_move / atr_val) * 100.0))
-            
-            border_c = "#ff3838" if direction == "SUPPLY" else "#00e676"
-            bg_c = "rgba(255, 56, 56, 0.12)" if direction == "SUPPLY" else "rgba(0, 230, 118, 0.12)"
-            status_t = "SUPPLY ACCUMULATION" if direction == "SUPPLY" else "DEMAND ABSORPTION"
-            retest_html = "<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px; white-space:nowrap;'>⚠️ ZONE RE-TEST REJECTION</div>" if pressure_pct > 75.0 else ""
-            
-            pressure_box_html = f"""
-            <div style='border: 1px dashed {border_c}; background-color: {bg_c}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
-                <div style='font-size: 8.5px; font-weight: 800; color: {border_c}; white-space: nowrap;'>{status_t}</div>
-                <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{pressure_pct:.1f}%</div>
-                {retest_html}
-            </div>
-            """
-            
-            cri_val, cri_status, cri_action = compute_bidirectional_cri(
-                df, ltp, target_price, atr_val, current_direction=direction, span_bars=5
-            )
-            
-            if cri_val >= 80.0:
-                cri_border = "#00e676" if "BUY" in cri_action else "#ff3838"
-                cri_bg = "rgba(0, 230, 118, 0.15)" if "BUY" in cri_action else "rgba(255, 56, 56, 0.15)"
-                action_color = "#00e676" if "BUY" in cri_action else "#ff5252"
-            elif cri_val >= 65.0:
-                cri_border = "#ffaa00"
-                cri_bg = "rgba(255, 170, 0, 0.12)"
-                action_color = "#ffaa00"
-            elif cri_val >= 40.0:
-                cri_border = "#ffc107"
-                cri_bg = "rgba(255, 193, 7, 0.08)"
-                action_color = "#ffc107"
-            else:
-                cri_border = "#30363d"
-                cri_bg = "#161b22"
-                action_color = "#8b949e"
-                
-            cri_box_html = f"""
-            <div style='border: 1px dashed {cri_border}; background-color: {cri_bg}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
-                <div style='font-size: 8.5px; font-weight: 800; color: {action_color}; white-space: nowrap;'>{cri_status}</div>
-                <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{cri_val:.1f}%</div>
-                <div style='color: {action_color}; font-size: 8px; font-weight: 900; margin-top: 1px; white-space: nowrap;'>⚡ {cri_action}</div>
-            </div>
-            """
-            
-            mtf_score = (max(bull_cnt, bear_cnt) / 4.0) * 25.0
-            vwap_score = 20.0 if ((direction == 'DEMAND' and ltp > vwap) or (direction == 'SUPPLY' and ltp < vwap)) else 0.0
-            rsi_score = 15.0 if ((direction == 'DEMAND' and 50 <= rsi <= 70) or (direction == 'SUPPLY' and 30 <= rsi <= 50)) else 5.0
-            zone_score = 20.0
-            pressure_component = min(20.0, pressure_pct * 0.2)
-            tcs = int(min(100.0, max(0.0, mtf_score + vwap_score + rsi_score + zone_score + pressure_component)))
-            
-            if tcs >= HIGH_CONVICTION_TCS_THRESHOLD:
-                current_rows.append({
-                    "ticker": ticker,
-                    "symbol": ticker.replace(".NS", ""),
-                    "zone_html": zone_html,
-                    "open": open_p,
-                    "ltp": ltp,
-                    "pnl": pnl_pct,
-                    "pressure_box": pressure_box_html,
-                    "cri_box": cri_box_html,
-                    "sl_box": sl_box_html,
-                    "target": target_price,
-                    "tcs": tcs,
-                    "cobi_html": cobi_html,
-                    "imbalance": imbalance_pct,
-                    "e1": ltp > ema1, "e3": ltp > ema3, "e5": ltp > ema5, "e15": ltp > ema15
-                })
-        except Exception:
+        atr_val = fast_atr(high, low, close, 14)
+        pnl_pct = ((ltp - open_p) / open_p) * 100.0
+        direction = "DEMAND" if ltp >= open_p else "SUPPLY"
+        
+        if direction == "SUPPLY":
+            target_price = ltp - max(atr_val * 1.2, ltp * 0.012)
+            sl_best_entry = max(day_high, open_p + max(0.35 * atr_val, ltp * 0.004))
+            sl_border_color = "#ff7675"
+            sl_bg_color = "rgba(255, 118, 117, 0.12)"
+            sl_title = "SELL ENTRY / SL"
+            zone_html = "<span style='color:#ff5252; font-weight:700;'>SUPPLY (15m)</span><br><span style='color:#ff7675; font-size:8.5px;'>SUPPLY (1D)</span>"
+        else:
+            target_price = ltp + max(atr_val * 1.2, ltp * 0.012)
+            sl_best_entry = min(day_low, open_p - max(0.35 * atr_val, ltp * 0.004))
+            sl_border_color = "#55efc4"
+            sl_bg_color = "rgba(85, 239, 196, 0.12)"
+            sl_title = "BUY ENTRY / SL"
+            zone_html = "<span style='color:#00e676; font-weight:700;'>DEMAND (15m)</span><br><span style='color:#55efc4; font-size:8.5px;'>DEMAND (1D)</span>"
+        
+        runway_gap = abs(target_price - ltp)
+        runway_pct = (runway_gap / ltp) * 100.0
+        if runway_pct < MIN_RUNWAY_PERCENT or runway_gap < 1.0:
             continue
-    
-    dashboard_eligible_rows = [r for r in current_rows if DASHBOARD_MIN_PRICE <= r['ltp'] <= DASHBOARD_MAX_PRICE]
-    dashboard_eligible_rows.sort(key=lambda x: x['tcs'], reverse=True)
-    
-    if not st.session_state.is_universe_locked and len(dashboard_eligible_rows) >= 4:
-        st.session_state.locked_symbols = [r['ticker'] for r in dashboard_eligible_rows[:MAX_LOCKED_STOCKS]]
-        st.session_state.is_universe_locked = True
         
-    if st.session_state.is_universe_locked and st.session_state.locked_symbols:
-        display_rows = [r for r in dashboard_eligible_rows if r['ticker'] in st.session_state.locked_symbols]
-        display_rows.sort(key=lambda x: st.session_state.locked_symbols.index(x['ticker']) if x['ticker'] in st.session_state.locked_symbols else 99)
-    else:
-        display_rows = dashboard_eligible_rows[:MAX_LOCKED_STOCKS]
+        sl_box_html = f"""
+        <div style='border: 1px dashed {sl_border_color}; background-color: {sl_bg_color}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
+            <div style='font-size: 8.5px; font-weight: 800; color: {sl_border_color}; white-space: nowrap;'>{sl_title}</div>
+            <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>Rs {sl_best_entry:.2f}</div>
+        </div>
+        """
         
-    elapsed_ms = int((time.time() - t0) * 1000)
-    now_time = datetime.datetime.now().strftime('%H:%M:%S')
+        tp = (high + low + close) / 3.0
+        cum_vol = np.sum(vol) + 1e-6
+        vwap = float(np.sum(tp * vol) / cum_vol)
+        rsi = fast_rsi(close, 14)
+        
+        ema1 = fast_ema(close[-15:], 13)
+        ema3 = fast_ema(close[-45::3], 13) if len(close) >= 40 else ema1
+        ema5 = fast_ema(close[-75::5], 13) if len(close) >= 65 else ema1
+        ema15 = fast_ema(close[-225::15], 13) if len(close) >= 150 else ema1
+        
+        bull_cnt = sum([ltp > ema1, ltp > ema3, ltp > ema5, ltp > ema15])
+        bear_cnt = 4 - bull_cnt
+        
+        bar_range = (high - low) + 1e-6
+        buy_power = np.sum(vol * ((close - low) / bar_range))
+        sell_power = np.sum(vol * ((high - close) / bar_range))
+        tot_power = buy_power + sell_power + 1e-6
+        
+        buy_pct = (buy_power / tot_power) * 100.0
+        imbalance_pct = ((buy_power - sell_power) / tot_power) * 100.0
+        cobi_html = f"{buy_pct:.0f}% Buy ({imbalance_pct:+.1f}%)"
+        
+        directional_move = (ltp - open_p) if direction == 'DEMAND' else (open_p - ltp)
+        pressure_pct = min(100.0, max(0.0, (directional_move / atr_val) * 100.0))
+        
+        border_c = "#ff3838" if direction == "SUPPLY" else "#00e676"
+        bg_c = "rgba(255, 56, 56, 0.12)" if direction == "SUPPLY" else "rgba(0, 230, 118, 0.12)"
+        status_t = "SUPPLY ACCUMULATION" if direction == "SUPPLY" else "DEMAND ABSORPTION"
+        retest_html = "<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px; white-space:nowrap;'>⚠️ ZONE RE-TEST REJECTION</div>" if pressure_pct > 75.0 else ""
+        
+        pressure_box_html = f"""
+        <div style='border: 1px dashed {border_c}; background-color: {bg_c}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
+            <div style='font-size: 8.5px; font-weight: 800; color: {border_c}; white-space: nowrap;'>{status_t}</div>
+            <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{pressure_pct:.1f}%</div>
+            {retest_html}
+        </div>
+        """
+        
+        cri_val, cri_status, cri_action = compute_bidirectional_cri(
+            df, ltp, target_price, atr_val, current_direction=direction, span_bars=5
+        )
+        
+        if cri_val >= 80.0:
+            cri_border = "#00e676" if "BUY" in cri_action else "#ff3838"
+            cri_bg = "rgba(0, 230, 118, 0.15)" if "BUY" in cri_action else "rgba(255, 56, 56, 0.15)"
+            action_color = "#00e676" if "BUY" in cri_action else "#ff5252"
+        elif cri_val >= 65.0:
+            cri_border = "#ffaa00"
+            cri_bg = "rgba(255, 170, 0, 0.12)"
+            action_color = "#ffaa00"
+        elif cri_val >= 40.0:
+            cri_border = "#ffc107"
+            cri_bg = "rgba(255, 193, 7, 0.08)"
+            action_color = "#ffc107"
+        else:
+            cri_border = "#30363d"
+            cri_bg = "#161b22"
+            action_color = "#8b949e"
+            
+        cri_box_html = f"""
+        <div style='border: 1px dashed {cri_border}; background-color: {cri_bg}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
+            <div style='font-size: 8.5px; font-weight: 800; color: {action_color}; white-space: nowrap;'>{cri_status}</div>
+            <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{cri_val:.1f}%</div>
+            <div style='color: {action_color}; font-size: 8px; font-weight: 900; margin-top: 1px; white-space: nowrap;'>⚡ {cri_action}</div>
+        </div>
+        """
+        
+        mtf_score = (max(bull_cnt, bear_cnt) / 4.0) * 25.0
+        vwap_score = 20.0 if ((direction == 'DEMAND' and ltp > vwap) or (direction == 'SUPPLY' and ltp < vwap)) else 0.0
+        rsi_score = 15.0 if ((direction == 'DEMAND' and 50 <= rsi <= 70) or (direction == 'SUPPLY' and 30 <= rsi <= 50)) else 5.0
+        zone_score = 20.0
+        pressure_component = min(20.0, pressure_pct * 0.2)
+        tcs = int(min(100.0, max(0.0, mtf_score + vwap_score + rsi_score + zone_score + pressure_component)))
+        
+        if tcs >= HIGH_CONVICTION_TCS_THRESHOLD:
+            current_rows.append({
+                "ticker": ticker,
+                "symbol": ticker.replace(".NS", ""),
+                "zone_html": zone_html,
+                "open": open_p,
+                "ltp": ltp,
+                "pnl": pnl_pct,
+                "pressure_box": pressure_box_html,
+                "cri_box": cri_box_html,
+                "sl_box": sl_box_html,
+                "target": target_price,
+                "tcs": tcs,
+                "cobi_html": cobi_html,
+                "imbalance": imbalance_pct,
+                "e1": ltp > ema1, "e3": ltp > ema3, "e5": ltp > ema5, "e15": ltp > ema15
+            })
+    except Exception:
+        continue
+
+dashboard_eligible_rows = [r for r in current_rows if DASHBOARD_MIN_PRICE <= r['ltp'] <= DASHBOARD_MAX_PRICE]
+dashboard_eligible_rows.sort(key=lambda x: x['tcs'], reverse=True)
+
+if not st.session_state.is_universe_locked and len(dashboard_eligible_rows) >= 4:
+    st.session_state.locked_symbols = [r['ticker'] for r in dashboard_eligible_rows[:MAX_LOCKED_STOCKS]]
+    st.session_state.is_universe_locked = True
     
-    html_output = build_html_view(display_rows, now_time, elapsed_ms, len(STREAM_TICKERS), st.session_state.is_universe_locked)
+if st.session_state.is_universe_locked and st.session_state.locked_symbols:
+    display_rows = [r for r in dashboard_eligible_rows if r['ticker'] in st.session_state.locked_symbols]
+    display_rows.sort(key=lambda x: st.session_state.locked_symbols.index(x['ticker']) if x['ticker'] in st.session_state.locked_symbols else 99)
+else:
+    display_rows = dashboard_eligible_rows[:MAX_LOCKED_STOCKS]
     
-    # Update single container slot without refreshing or blinking the whole browser page
-    terminal_slot.markdown(html_output, unsafe_allow_html=True)
-    time.sleep(2)
+elapsed_ms = int((time.time() - t0) * 1000)
+now_time = datetime.datetime.now().strftime('%H:%M:%S')
+
+html_output = build_html_view(display_rows, now_time, elapsed_ms, len(STREAM_TICKERS), st.session_state.is_universe_locked)
+st.markdown(html_output, unsafe_allow_html=True)
+
+# Streamlit native non-blocking auto refresh mechanism (Every 15 seconds to prevent throttling)
+time.sleep(15)
+st.rerun()
