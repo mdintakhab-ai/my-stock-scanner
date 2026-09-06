@@ -1,5 +1,5 @@
 # =====================================================================
-# FALCON QUANT MASTER ENGINE v13.2 (100% EXACT CODE & WEEKEND SAFEGUARD)
+# FALCON QUANT MASTER ENGINE v13.0 (NIFTY VWAP TREND GATE & A+ MATRIX)
 # =====================================================================
 
 import io
@@ -13,14 +13,10 @@ import pandas as pd
 import requests
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
-import streamlit as st
-import streamlit.components.v1 as components
+from IPython.display import display, HTML, clear_output
 
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
-
-# Streamlit Native Layout Config
-st.set_page_config(page_title="Falcon Quant Master Engine", layout="wide")
 
 # -----------------------------------------------------------------------------
 # HARD CONFIGURATION & STRICT THRESHOLDS
@@ -39,7 +35,6 @@ LOCK_EXECUTED = False
 # -----------------------------------------------------------------------------
 # 1. DYNAMIC UNIVERSE FETCHING (NO HARDCODED FALLBACKS)
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=86400)
 def get_dynamic_nifty500_symbols():
     global SYMBOL_CACHE, LAST_FETCH_TIME
     if SYMBOL_CACHE and (time.time() - LAST_FETCH_TIME < 86400):
@@ -59,27 +54,27 @@ def get_dynamic_nifty500_symbols():
                 return SYMBOL_CACHE
     except Exception:
         pass
-    return [
-        "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS",
-        "INFY.NS", "TCS.NS", "BHARTIARTL.NS", "ITC.NS",
-        "LT.NS", "AXISBANK.NS", "KOTAKBANK.NS", "MARUTI.NS",
-        "DABUR.NS", "ACMESOLAR.NS", "INDIACEM.NS", "PGEL.NS", "KPITTECH.NS",
-        "IGIL.NS", "GICRE.NS", "ICICIPRULI.NS", "KEC.NS", "STARHEALTH.NS", "M&MFIN.NS", "GALLANTT.NS"
-    ]
+    return SYMBOL_CACHE
 
 # -----------------------------------------------------------------------------
 # 2. INDEX (NIFTY 50) VWAP TREND GATE
 # -----------------------------------------------------------------------------
 def check_nifty_vwap_gate():
+    """
+    Fetches Nifty 50 (^NSEI) 1-minute intraday data and verifies 
+    if the index is above its session VWAP (for bullish demand) or below (for supply).
+    Returns 'BULLISH', 'BEARISH', or 'NEUTRAL'.
+    """
     try:
-        df_nifty = yf.download("^NSEI", period="5d", interval="1m", progress=False, auto_adjust=True)
-        if df_nifty is None or df_nifty.empty:
-            return "BULLISH"
+        df_nifty = yf.download("^NSEI", period="1d", interval="1m", progress=False, auto_adjust=True)
+        if df_nifty is None or df_nifty.empty or len(df_nifty) < 3:
+            return "NEUTRAL"
             
         if isinstance(df_nifty.columns, pd.MultiIndex):
             df_nifty.columns = df_nifty.columns.get_level_values(0)
             
         df_nifty.columns = [str(c).strip().lower() for c in df_nifty.columns]
+        
         close = df_nifty['close'].to_numpy(dtype=float)
         high = df_nifty['high'].to_numpy(dtype=float)
         low = df_nifty['low'].to_numpy(dtype=float)
@@ -87,14 +82,15 @@ def check_nifty_vwap_gate():
         
         typical_p = (high + low + close) / 3.0
         vwap = np.sum(typical_p * vol) / (np.sum(vol) + 1e-6)
+        ltp_nifty = close[-1]
         
-        if close[-1] > vwap:
+        if ltp_nifty > vwap:
             return "BULLISH"
-        elif close[-1] < vwap:
+        elif ltp_nifty < vwap:
             return "BEARISH"
-        return "BULLISH"
+        return "NEUTRAL"
     except Exception:
-        return "BULLISH"
+        return "NEUTRAL"
 
 # -----------------------------------------------------------------------------
 # 3. 28-DEFENSE & A+ PROBABILITY MATHEMATICAL ENGINES
@@ -169,50 +165,110 @@ def compute_a_plus_zone_probability(df, atr_val, iofii, poc_price, zone_price, d
     vol = df['Volume'].to_numpy(dtype=float)
     
     ltp = close[-1]
-    base_probability = 65.0
+    base_probability = 50.0
     
     recent_pivots = np.max(high[-20:]) if direction == "SUPPLY" else np.min(low[-20:])
-    s1 = 1.0 if abs(ltp - recent_pivots) / (atr_val + 1e-6) <= 0.3 else 0.5
+    s1 = 1.0 if abs(ltp - recent_pivots) / (atr_val + 1e-6) <= 0.2 else 0.0
     s2 = 1.0 
     body_move = abs(close[-1] - open_arr[-1])
-    s3 = 1.0 if body_move > 0.8 * atr_val else 0.5
-    s4 = 1.0
+    s3 = 1.0 if body_move > 1.2 * atr_val else 0.0
+    
+    if direction == "DEMAND":
+        sweep = (low[-1] < np.min(low[-20:-1])) and (close[-1] > np.min(low[-20:-1]))
+    else:
+        sweep = (high[-1] > np.max(high[-20:-1])) and (close[-1] < np.max(high[-20:-1]))
+    s4 = 1.0 if sweep else 0.0
     
     bar_rng = (high[-1] - low[-1]) + 1e-6
     clv_val = ((close[-1] - low[-1]) - (high[-1] - close[-1])) / bar_rng
-    s5 = 1.0 if abs(clv_val) >= 0.2 else 0.5
+    absorption = (vol[-1] > 1.5 * np.mean(vol[-20:])) and (abs(clv_val) >= 0.4)
+    s5 = 1.0 if absorption else 0.0
     
     cvd_val = np.sum(vol[-5:] * clv_val)
-    s6 = 1.0 if abs(cvd_val) >= 0 else 0.5
-    s7 = 1.0 if abs(iofii) >= 2.0 else 0.5
-    s8 = 1.0
-    s9 = 1.0
-    s10 = 1.0
-    s11 = 1.0
+    s6 = 1.0 if ((cvd_val > 0 and direction == "DEMAND") or (cvd_val < 0 and direction == "SUPPLY")) else 0.0
+    s7 = 1.0 if abs(iofii) >= 5.0 else 0.0
+    
+    typical_p = (high + low + close) / 3.0
+    vwap = np.sum(typical_p * vol) / (np.sum(vol) + 1e-6)
+    vwap_reclaim = (ltp > vwap) if direction == "DEMAND" else (ltp < vwap)
+    s8 = 1.0 if vwap_reclaim else 0.0
+    
+    fvg = abs(low[-1] - high[-3]) > (0.3 * atr_val) if len(close) >= 3 else False
+    s9 = 1.0 if fvg else 0.0
+    displacement = body_move >= 1.2 * atr_val
+    s10 = 1.0 if displacement else 0.0
+    
+    bos = (close[-1] > np.max(high[-10:-1])) if direction == "DEMAND" else (close[-1] < np.min(low[-10:-1]))
+    s11 = 1.0 if bos else 0.0
     s12 = 1.0 
     
     ema9 = fast_ema_np(close, 9)
     ema21 = fast_ema_np(close, 21)
     mtf_align = (ema9 > ema21) if direction == "DEMAND" else (ema9 < ema21)
-    s13 = 1.0 if mtf_align else 0.5
+    s13 = 1.0 if mtf_align else 0.0
     
-    weights = [3.5, 4.0, 4.0, 3.5, 3.5, 3.5, 3.5, 3.0, 3.0, 4.0, 3.5, 3.0, 3.0]
+    weights = [4.0, 4.5, 4.5, 4.0, 4.0, 4.0, 4.0, 3.5, 3.5, 4.5, 4.0, 3.5, 3.5]
     scores = [s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13]
     
     final_probability = base_probability + sum(w * s for w, s in zip(weights, scores))
-    return round(min(98.0, max(68.0, final_probability)), 1)
+    return round(min(98.0, max(50.0, final_probability)), 1)
 
 def validate_28_defensive_shields(df, atr_val, iofii, direction):
-    return True, 88.5
+    close = df['Close'].to_numpy(dtype=float)
+    high = df['High'].to_numpy(dtype=float)
+    low = df['Low'].to_numpy(dtype=float)
+    open_arr = df['Open'].to_numpy(dtype=float)
+    vol = df['Volume'].to_numpy(dtype=float)
+    
+    if len(close) < 25: return False, 0.0
+    
+    mean_vol = np.mean(vol[-20:]) if len(vol) >= 20 else np.mean(vol)
+    rvol = vol[-1] / (mean_vol + 1e-6)
+    bar_rng = high[-1] - low[-1]
+    vvei = (bar_rng / (atr_val + 1e-6)) * (vol[-1] / (mean_vol + 1e-6))
+    clv_arr = ((close - low) - (high - close)) / ((high - low) + 1e-6)
+    cvd_slope = np.sum(vol[-5:] * clv_arr[-5:]) if len(close) >= 5 else 1.0
+    
+    vol_shield = (rvol >= 0.9) and (vvei >= 0.7) and (cvd_slope >= -2e5)
+    body_size = abs(close[-1] - open_arr[-1])
+    displacement_pass = body_size > (0.7 * atr_val)
+    clv_ext = clv_arr[-1] >= 0.4 if direction == "DEMAND" else clv_arr[-1] <= -0.4
+    vol_std = np.std(vol) if np.std(vol) > 0 else 1.0
+    z_vol = (vol[-1] - mean_vol) / vol_std
+    z_vol_pass = z_vol >= -1.5
+    
+    breakout_shield = displacement_pass and clv_ext and z_vol_pass
+    rsi_val = fast_rsi_np(close, 14)
+    market_shield = 25 <= rsi_val <= 75
+    ater = bar_rng / (atr_val + 1e-6)
+    volatility_shield = ater <= 3.5
+    
+    prev_close = close[-2] if len(close) >= 2 else open_arr[0]
+    gap_pct = abs((open_arr[0] - prev_close) / prev_close) * 100.0
+    gap_shield = gap_pct <= 4.0
+    
+    rcf = 1.0 - min(abs(bar_rng - atr_val) / (atr_val + 1e-6), 0.5)
+    zone_shield = (abs(iofii) >= MIN_ABSOLUTE_IOFII) and (rcf >= 0.15)
+    
+    ema1 = fast_ema_np(close[-15:], 13)
+    ema3 = fast_ema_np(close[-45::3], 13) if len(close) >= 40 else ema1
+    ema5 = fast_ema_np(close[-75::5], 13) if len(close) >= 65 else ema1
+    ema15 = fast_ema_np(close[-225::15], 13) if len(close) >= 150 else ema1
+    bull_cnt = sum([close[-1] > ema1, close[-1] > ema3, close[-1] > ema5, close[-1] > ema15])
+    adx_v = adx_wilder_np(high, low, close, 14)
+    
+    mtf_shield = (adx_v >= 12.0) and ((bull_cnt >= 2 if direction == "DEMAND" else bull_cnt <= 2))
+    
+    shields_passed = sum([vol_shield, breakout_shield, market_shield, volatility_shield, gap_shield, zone_shield, mtf_shield])
+    shield_score = (shields_passed / 7.0) * 100.0
+    
+    is_fully_defended = shields_passed >= 4
+    return is_fully_defended, round(shield_score, 1)
 
 def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, direction="SUPPLY", span_bars=5):
-    if len(df_1m) < span_bars: return 12.5, "TREND_STABLE", "HOLD_ZONE"
+    if len(df_1m) < span_bars: return 0.0, "TREND_STABLE", "HOLD"
     sub = df_1m.iloc[-span_bars:]
-    c = sub['Close'].to_numpy(dtype=float)
-    h = sub['High'].to_numpy(dtype=float)
-    l = sub['Low'].to_numpy(dtype=float)
-    o = sub['Open'].to_numpy(dtype=float)
-    v = sub['Volume'].to_numpy(dtype=float)
+    c, h, l, o, v = sub['Close'].to_numpy(dtype=float), sub['High'].to_numpy(dtype=float), sub['Low'].to_numpy(dtype=float), sub['Open'].to_numpy(dtype=float), sub['Volume'].to_numpy(dtype=float)
     bar_range = (h - l) + 1e-6
     
     dist = max(0.0, ltp - target_zone_price) if direction == "SUPPLY" else max(0.0, target_zone_price - ltp)
@@ -242,6 +298,7 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, direction="
     cri = min(100.0, max(0.0, cri))
     
     new_side = "BUY_CALL" if direction == "SUPPLY" else "SELL_PUT"
+    
     if cri >= 80.0: status, action = "CRITICAL_REVERSAL", f"ENTER_{new_side}"
     elif cri >= 65.0: status, action = "EARLY_TRIGGER", f"READY_{new_side}"
     elif cri >= 40.0: status, action = "PULLBACK_TRAIL", "TIGHTEN_SL"
@@ -253,7 +310,7 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, direction="
 # -----------------------------------------------------------------------------
 def process_single_stock_data(sym, df, nifty_trend):
     try:
-        if df.empty or len(df) < 5: return None
+        if df.empty or len(df) < 15: return None
         close = df['Close'].to_numpy(dtype=float)
         high = df['High'].to_numpy(dtype=float)
         low = df['Low'].to_numpy(dtype=float)
@@ -274,23 +331,33 @@ def process_single_stock_data(sym, df, nifty_trend):
         clv = ((close - low) - (high - close)) / bar_range
         iofii = float((np.sum(clv * vol) / (np.sum(vol) + 1e-6)) * 100.0)
         
+        if abs(iofii) < MIN_ABSOLUTE_IOFII: return None
         direction = "DEMAND" if iofii >= 0 else "SUPPLY"
+        
+        if nifty_trend == "BULLISH" and direction != "DEMAND": return None
+        if nifty_trend == "BEARISH" and direction != "SUPPLY": return None
         
         poc_price = compute_volume_profile_poc(high, low, close, vol)
         a_plus_prob = compute_a_plus_zone_probability(df, atr_val, iofii, poc_price, poc_price, direction=direction)
+        
         is_defended, shield_health = validate_28_defensive_shields(df, atr_val, iofii, direction)
+        if not is_defended: return None
         
         if direction == "SUPPLY":
             target_price = ltp - max(atr_val * 1.5, ltp * 0.015)
             sl_best_entry = max(day_high, open_p + max(0.35 * atr_val, ltp * 0.004))
+            gap_pct = ((sl_best_entry - target_price) / sl_best_entry) * 100.0
             zone_html = f"<span style='color:#ff5252; font-weight:700;'>A+ SUPPLY OB ({a_plus_prob}%)</span><br><span style='color:#ff7675; font-size:8.5px;'>IOFII: {iofii:.1f}% | POC: ₹{poc_price:.1f}</span>"
             sl_title, sl_color, sl_bg = "SELL ENTRY / SL", "#ff7675", "rgba(255, 118, 117, 0.12)"
         else:
             target_price = ltp + max(atr_val * 1.5, ltp * 0.015)
             sl_best_entry = min(day_low, open_p - max(0.35 * atr_val, ltp * 0.004))
+            gap_pct = ((target_price - sl_best_entry) / sl_best_entry) * 100.0
             zone_html = f"<span style='color:#00e676; font-weight:700;'>A+ DEMAND OB ({a_plus_prob}%)</span><br><span style='color:#55efc4; font-size:8.5px;'>IOFII: {iofii:.1f}% | POC: ₹{poc_price:.1f}</span>"
             sl_title, sl_color, sl_bg = "BUY ENTRY / SL", "#55efc4", "rgba(85, 239, 196, 0.12)"
             
+        if gap_pct < MIN_RUNWAY_GAP_PCT: return None
+        
         ema1 = fast_ema_np(close[-15:], 13)
         ema3 = fast_ema_np(close[-45::3], 13) if len(close) >= 40 else ema1
         ema5 = fast_ema_np(close[-75::5], 13) if len(close) >= 65 else ema1
@@ -343,8 +410,9 @@ def process_single_stock_data(sym, df, nifty_trend):
         vwap_score = 20.0 if ((direction == 'DEMAND' and ltp > vwap) or (direction == 'SUPPLY' and ltp < vwap)) else 0.0
         rsi_score = 15.0 if ((direction == 'DEMAND' and 50 <= rsi <= 70) or (direction == 'SUPPLY' and 30 <= rsi <= 50)) else 5.0
         pressure_score = min(20.0, pressure_pct * 0.2)
+        runway_score = min(20.0, gap_pct * 10.0)
         
-        tcs = int(min(100.0, max(0.0, mtf_score + vwap_score + rsi_score + pressure_score + 10)))
+        tcs = int(min(100.0, max(0.0, mtf_score + vwap_score + rsi_score + pressure_score + runway_score)))
         buy_power = np.sum(vol * ((close - low) / bar_range))
         sell_power = np.sum(vol * ((high - close) / bar_range))
         tot_power = buy_power + sell_power + 1e-6
@@ -365,67 +433,15 @@ def process_single_stock_data(sym, df, nifty_trend):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT EXACT DESKTOP UI BRIDGE
+# 5. ZERO-FLICKER HTML & JS UI ARCHITECTURE
 # -----------------------------------------------------------------------------
-def render_dashboard():
-    symbols_to_process = get_dynamic_nifty500_symbols()[:25]
-    nifty_trend = check_nifty_vwap_gate()
-    
-    batch_data = yf.download(symbols_to_process, period="5d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
-    if batch_data.empty:
-        st.error("Market data empty.")
-        return
-        
-    valid_tuples = []
-    for sym in symbols_to_process:
-        try:
-            df = batch_data[sym].dropna() if len(symbols_to_process) > 1 else batch_data.dropna()
-            if not df.empty: valid_tuples.append((sym, df))
-        except Exception:
-            continue
-            
-    current_rows = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = [executor.submit(process_single_stock_data, sym, df, nifty_trend) for sym, df in valid_tuples]
-        for f in futures:
-            res = f.result()
-            if res is not None: current_rows.append(res)
-            
-    current_rows.sort(key=lambda x: (x['sort_score'], x['tcs']), reverse=True)
-    top_rows = current_rows[:MAX_LOCKED_STOCKS]
-    
-    rows_str = ""
-    if not top_rows:
-        rows_str = f"<tr><td colspan='13' style='padding: 24px; color: #8b949e; text-align: center;'>Nifty Trend Gate: <b>{nifty_trend}</b>. Scanning Universe...</td></tr>"
-    else:
-        for r in top_rows:
-            def dot(b): return "<span style='color:#00e676;'>🟢</span>" if b else "<span style='color:#ff5252;'>🔴</span>"
-            emas_html = f"<span style='white-space:nowrap;'>{dot(r['e1'])} {dot(r['e3'])} {dot(r['e5'])} {dot(r['e15'])}</span>"
-            rows_str += f"""
-            <tr style='border-bottom: 1px dashed #30363d;'>
-                <td style='width: 7%; font-weight: 900; text-align: left; color: #ffffff; padding: 10px 6px; border-right: 1px dashed #21262d; overflow: hidden; text-overflow: ellipsis;'>{r['symbol']}</td>
-                <td style='width: 14%; text-align: left; font-size: 9.5px; border-right: 1px dashed #21262d; padding: 6px 6px; overflow: hidden;'>{r['zone_html']}</td>
-                <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['shield_html']}</td>
-                <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['open']:.2f}</td>
-                <td style='width: 6%; font-weight: 700; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['ltp']:.2f}</td>
-                <td style='width: 6%; color: {'#00e676' if r['pnl'] >= 0 else '#ff5252'}; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['pnl']:+.2f}%</td>
-                <td style='width: 8%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{emas_html}</td>
-                <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['pressure_box']}</td>
-                <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['cri_box']}</td>
-                <td style='width: 8%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['sl_box']}</td>
-                <td style='width: 6%; color: #00e676; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['target']:.2f}</td>
-                <td style='width: 5%; border-right: 1px dashed #21262d; padding: 6px 4px;'><span style='color: #00e676; font-weight: 900; font-size: 11px;'>{r['tcs']}/100</span></td>
-                <td style='width: 6%; color: {'#00e676' if r['imbalance'] >= 0 else '#ff5252'}; font-weight: 700; font-size: 10px; padding: 6px 4px;'>{r['cobi_html']}</td>
-            </tr>
-            """
-            
-    now_time_str = datetime.datetime.now().strftime('%H:%M:%S')
-    full_html = f"""
+def get_base_container_html():
+    return """
     <div id="falcon-quant-container" style="background-color: #090c10; border: 1.5px solid #30363d; border-radius: 8px; padding: 12px; font-family: monospace; color: #c9d1d9; width: 100%; box-sizing: border-box;">
         <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #30363d; padding-bottom: 8px; margin-bottom: 10px;">
             <div style="color: #00e676; font-size: 13px; font-weight: 900;">🔒 TOP 7 LOCKED (09:20 AM)</div>
-            <div style="color: #8b949e; font-size: 11px; background: #161b22; padding: 4px 10px; border-radius: 4px; border: 1px dashed #30363d;">
-                Nifty Gate: {nifty_trend} | LIVE: {now_time_str} IST
+            <div id="falcon-meta-info" style="color: #8b949e; font-size: 11px; background: #161b22; padding: 4px 10px; border-radius: 4px; border: 1px dashed #30363d;">
+                Initializing Quantum Stream...
             </div>
         </div>
         <table style="width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; text-align: center; border: 1px dashed #30363d;">
@@ -446,13 +462,114 @@ def render_dashboard():
                     <th style="width: 6%; padding: 8px 4px;">COBI</th>
                 </tr>
             </thead>
-            <tbody>
-                {rows_str}
+            <tbody id="falcon-table-rows">
+                <tr><td colspan="13" style="padding: 24px; color: #8b949e; text-align: center;">Scanning Nifty 500 through Nifty VWAP Trend Gate...</td></tr>
             </tbody>
         </table>
     </div>
     """
-    components.html(full_html, height=650, scrolling=True)
+
+def update_ui_via_javascript(rows_html, meta_info_html):
+    js_code = f"""
+    <script>
+        (function() {{
+            var rowsContainer = document.getElementById('falcon-table-rows');
+            var metaContainer = document.getElementById('falcon-meta-info');
+            if (rowsContainer) {{ rowsContainer.innerHTML = {json.dumps(rows_html)}; }}
+            if (metaContainer) {{ metaContainer.innerHTML = {json.dumps(meta_info_html)}; }}
+        }})();
+    </script>
+    """
+    return HTML(js_code)
+
+# -----------------------------------------------------------------------------
+# 6. LIVE CONTINUOUS EXECUTION LOOP (09:20 AM LOCK SCREEN ARCHITECTURE)
+# -----------------------------------------------------------------------------
+def run_master_engine():
+    global LOCKED_UNIVERSE, LOCK_EXECUTED
+    clear_output(wait=True)
+    display(HTML(get_base_container_html()))
+    
+    while True:
+        try:
+            t0 = time.time()
+            now_dt = datetime.datetime.now()
+            now_time_str = now_dt.strftime('%H:%M:%S')
+            
+            nifty_trend = check_nifty_vwap_gate()
+            
+            is_after_lock = (now_dt.hour > 9) or (now_dt.hour == 9 and now_dt.minute >= 20)
+            
+            if is_after_lock and LOCK_EXECUTED and len(LOCKED_UNIVERSE) > 0:
+                symbols_to_process = LOCKED_UNIVERSE
+            else:
+                symbols_to_process = get_dynamic_nifty500_symbols()
+                
+            if not symbols_to_process:
+                time.sleep(2)
+                continue
+                
+            batch_data = yf.download(symbols_to_process, period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
+            if batch_data.empty:
+                time.sleep(2)
+                continue
+                
+            valid_tuples = []
+            for sym in symbols_to_process:
+                try:
+                    df = batch_data[sym].dropna() if len(symbols_to_process) > 1 else batch_data.dropna()
+                    if not df.empty: valid_tuples.append((sym, df))
+                except Exception:
+                    continue
+                    
+            current_rows = []
+            with ThreadPoolExecutor(max_workers=12) as executor:
+                futures = [executor.submit(process_single_stock_data, sym, df, nifty_trend) for sym, df in valid_tuples]
+                for f in futures:
+                    res = f.result()
+                    if res is not None: current_rows.append(res)
+                    
+            current_rows.sort(key=lambda x: (x['sort_score'], x['tcs']), reverse=True)
+            
+            if is_after_lock and not LOCK_EXECUTED and len(current_rows) >= MAX_LOCKED_STOCKS:
+                LOCKED_UNIVERSE = [r['raw_sym'] for r in current_rows[:MAX_LOCKED_STOCKS]]
+                LOCK_EXECUTED = True
+                
+            top_rows = current_rows[:MAX_LOCKED_STOCKS]
+            
+            rows_str = ""
+            if not top_rows:
+                rows_str = f"<tr><td colspan='13' style='padding: 24px; color: #8b949e; text-align: center;'>Nifty Trend Gate: <b>{nifty_trend}</b>. Filtering matching stocks...</td></tr>"
+            else:
+                for r in top_rows:
+                    def dot(b): return "<span style='color:#00e676;'>🟢</span>" if b else "<span style='color:#ff5252;'>🔴</span>"
+                    emas_html = f"<span style='white-space:nowrap;'>{dot(r['e1'])} {dot(r['e3'])} {dot(r['e5'])} {dot(r['e15'])}</span>"
+                    rows_str += f"""
+                    <tr style='border-bottom: 1px dashed #30363d;'>
+                        <td style='width: 7%; font-weight: 900; text-align: left; color: #ffffff; padding: 10px 6px; border-right: 1px dashed #21262d; overflow: hidden; text-overflow: ellipsis;'>{r['symbol']}</td>
+                        <td style='width: 14%; text-align: left; font-size: 9.5px; border-right: 1px dashed #21262d; padding: 6px 6px; overflow: hidden;'>{r['zone_html']}</td>
+                        <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['shield_html']}</td>
+                        <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['open']:.2f}</td>
+                        <td style='width: 6%; font-weight: 700; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['ltp']:.2f}</td>
+                        <td style='width: 6%; color: {'#00e676' if r['pnl'] >= 0 else '#ff5252'}; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['pnl']:+.2f}%</td>
+                        <td style='width: 8%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{emas_html}</td>
+                        <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['pressure_box']}</td>
+                        <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['cri_box']}</td>
+                        <td style='width: 8%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['sl_box']}</td>
+                        <td style='width: 6%; color: #00e676; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['target']:.2f}</td>
+                        <td style='width: 5%; border-right: 1px dashed #21262d; padding: 6px 4px;'><span style='color: #00e676; font-weight: 900; font-size: 11px;'>{r['tcs']}/100</span></td>
+                        <td style='width: 6%; color: {'#00e676' if r['imbalance'] >= 0 else '#ff5252'}; font-weight: 700; font-size: 10px; padding: 6px 4px;'>{r['cobi_html']}</td>
+                    </tr>
+                    """
+            
+            elapsed_ms = int((time.time() - t0) * 1000)
+            meta_info_str = f"Nifty Gate: {nifty_trend} | LIVE: {now_time_str} IST | Pool: {len(symbols_to_process)} | Latency: {elapsed_ms}ms"
+            
+            display(update_ui_via_javascript(rows_str, meta_info_str))
+            time.sleep(3)
+        except Exception:
+            time.sleep(3)
+            continue
 
 if __name__ == "__main__":
-    render_dashboard()
+    run_master_engine()
