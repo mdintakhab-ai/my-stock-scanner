@@ -1,7 +1,6 @@
 # =====================================================================
-# FALCON QUANT MASTER ENGINE v13.0 (EXACT JUPYTER UI & NIFTY GATE)
+# FALCON QUANT MASTER ENGINE v13.0 (STREAMLIT & JUPYTER UI COMPATIBLE)
 # =====================================================================
-!pip install -q yfinance pandas numpy requests
 
 import io
 import time
@@ -14,7 +13,6 @@ import pandas as pd
 import requests
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
-from IPython.display import display, HTML, clear_output
 
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
@@ -424,144 +422,51 @@ def process_single_stock_data(sym, df, nifty_trend):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. ZERO-FLICKER HTML & JS UI ARCHITECTURE (STRETCHED & CLEAN)
+# 5. STREAMLIT WEB APP ARCHITECTURE
 # -----------------------------------------------------------------------------
-def get_base_container_html():
-    return """
-    <div id="falcon-quant-container" style="background-color: #090c10; border: 1.5px solid #30363d; border-radius: 8px; padding: 12px; font-family: monospace; color: #c9d1d9; width: 100%; box-sizing: border-box;">
-        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #30363d; padding-bottom: 8px; margin-bottom: 10px;">
-            <div style="color: #00e676; font-size: 13px; font-weight: 900;">🔒 TOP 7 LOCKED (09:20 AM)</div>
-            <div id="falcon-meta-info" style="color: #8b949e; font-size: 11px; background: #161b22; padding: 4px 10px; border-radius: 4px; border: 1px dashed #30363d;">
-                Initializing Quantum Stream...
-            </div>
-        </div>
-        <table style="width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; text-align: center; border: 1px dashed #30363d;">
-            <thead>
-                <tr style="background: #161b22; color: #8b949e; text-transform: uppercase; font-size: 9.5px; border-bottom: 1px dashed #30363d;">
-                    <th style="width: 7%; text-align: left; padding: 8px 6px; border-right: 1px dashed #30363d;">Symbol</th>
-                    <th style="width: 14%; text-align: left; padding: 8px 6px; border-right: 1px dashed #30363d;">Zone Alignments</th>
-                    <th style="width: 6%; border-right: 1px dashed #30363d;">Shield</th>
-                    <th style="width: 6%; border-right: 1px dashed #30363d;">Open</th>
-                    <th style="width: 6%; border-right: 1px dashed #30363d;">LTP</th>
-                    <th style="width: 6%; border-right: 1px dashed #30363d;">Change</th>
-                    <th style="width: 8%; border-right: 1px dashed #30363d;">(1m|3m|5m|15m)</th>
-                    <th style="width: 11%; border-right: 1px dashed #30363d;">Supply/Demand</th>
-                    <th style="width: 11%; border-right: 1px dashed #30363d;">Reversal (CRI)</th>
-                    <th style="width: 8%; border-right: 1px dashed #30363d;">SL / Entry</th>
-                    <th style="width: 6%; border-right: 1px dashed #30363d;">Target</th>
-                    <th style="width: 5%; border-right: 1px dashed #30363d;">TCS</th>
-                    <th style="width: 6%; padding: 8px 4px;">COBI</th>
-                </tr>
-            </thead>
-            <tbody id="falcon-table-rows">
-                <tr><td colspan="13" style="padding: 24px; color: #8b949e; text-align: center;">Scanning Nifty 500 through Nifty VWAP Trend Gate...</td></tr>
-            </tbody>
-        </table>
-    </div>
-    """
+st.markdown("<h2 style='color: #00e676;'>🔒 TOP 7 LOCKED (09:20 AM)</h2>", unsafe_allow_html=True)
+status_placeholder = st.empty()
+table_placeholder = st.empty()
 
-def update_ui_via_javascript(rows_html, meta_info_html):
-    js_code = f"""
-    <script>
-        (function() {{
-            var rowsContainer = document.getElementById('falcon-table-rows');
-            var metaContainer = document.getElementById('falcon-meta-info');
-            if (rowsContainer) {{ rowsContainer.innerHTML = {json.dumps(rows_html)}; }}
-            if (metaContainer) {{ metaContainer.innerHTML = {json.dumps(meta_info_html)}; }}
-        }})();
-    </script>
-    """
-    return HTML(js_code)
-
-# -----------------------------------------------------------------------------
-# 6. LIVE CONTINUOUS EXECUTION LOOP (09:20 AM LOCK SCREEN ARCHITECTURE)
-# -----------------------------------------------------------------------------
-def run_master_engine():
-    global LOCKED_UNIVERSE, LOCK_EXECUTED
-    clear_output(wait=True)
-    display(HTML(get_base_container_html()))
+def main_loop():
+    symbols_to_process = get_dynamic_nifty500_symbols()
+    if not symbols_to_process:
+        st.warning("Fetching symbols failed.")
+        return
+        
+    nifty_trend = check_nifty_vwap_gate()
+    status_placeholder.info(f"Nifty Trend Gate: **{nifty_trend}** | Scanning Nifty 500 Universe...")
     
-    while True:
+    batch_data = yf.download(symbols_to_process[:100], period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
+    if batch_data.empty:
+        st.error("Market data empty.")
+        return
+        
+    valid_tuples = []
+    for sym in symbols_to_process[:100]:
         try:
-            t0 = time.time()
-            now_dt = datetime.datetime.now()
-            now_time_str = now_dt.strftime('%H:%M:%S')
-            
-            # Fetch Nifty VWAP Trend Gate state
-            nifty_trend = check_nifty_vwap_gate()
-            
-            is_after_lock = (now_dt.hour > 9) or (now_dt.hour == 9 and now_dt.minute >= 20)
-            
-            if is_after_lock and LOCK_EXECUTED and len(LOCKED_UNIVERSE) > 0:
-                symbols_to_process = LOCKED_UNIVERSE
-            else:
-                symbols_to_process = get_dynamic_nifty500_symbols()
-                
-            if not symbols_to_process:
-                time.sleep(2)
-                continue
-                
-            batch_data = yf.download(symbols_to_process, period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
-            if batch_data.empty:
-                time.sleep(2)
-                continue
-                
-            valid_tuples = []
-            for sym in symbols_to_process:
-                try:
-                    df = batch_data[sym].dropna() if len(symbols_to_process) > 1 else batch_data.dropna()
-                    if not df.empty: valid_tuples.append((sym, df))
-                except Exception:
-                    continue
-                    
-            current_rows = []
-            with ThreadPoolExecutor(max_workers=12) as executor:
-                futures = [executor.submit(process_single_stock_data, sym, df, nifty_trend) for sym, df in valid_tuples]
-                for f in futures:
-                    res = f.result()
-                    if res is not None: current_rows.append(res)
-                    
-            current_rows.sort(key=lambda x: (x['sort_score'], x['tcs']), reverse=True)
-            
-            if is_after_lock and not LOCK_EXECUTED and len(current_rows) >= MAX_LOCKED_STOCKS:
-                LOCKED_UNIVERSE = [r['raw_sym'] for r in current_rows[:MAX_LOCKED_STOCKS]]
-                LOCK_EXECUTED = True
-                
-            top_rows = current_rows[:MAX_LOCKED_STOCKS]
-            
-            rows_str = ""
-            if not top_rows:
-                rows_str = f"<tr><td colspan='13' style='padding: 24px; color: #8b949e; text-align: center;'>Nifty Trend Gate: <b>{nifty_trend}</b>. Filtering matching stocks...</td></tr>"
-            else:
-                for r in top_rows:
-                    def dot(b): return "<span style='color:#00e676;'>🟢</span>" if b else "<span style='color:#ff5252;'>🔴</span>"
-                    emas_html = f"<span style='white-space:nowrap;'>{dot(r['e1'])} {dot(r['e3'])} {dot(r['e5'])} {dot(r['e15'])}</span>"
-                    rows_str += f"""
-                    <tr style='border-bottom: 1px dashed #30363d;'>
-                        <td style='width: 7%; font-weight: 900; text-align: left; color: #ffffff; padding: 10px 6px; border-right: 1px dashed #21262d; overflow: hidden; text-overflow: ellipsis;'>{r['symbol']}</td>
-                        <td style='width: 14%; text-align: left; font-size: 9.5px; border-right: 1px dashed #21262d; padding: 6px 6px; overflow: hidden;'>{r['zone_html']}</td>
-                        <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['shield_html']}</td>
-                        <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['open']:.2f}</td>
-                        <td style='width: 6%; font-weight: 700; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['ltp']:.2f}</td>
-                        <td style='width: 6%; color: {'#00e676' if r['pnl'] >= 0 else '#ff5252'}; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['pnl']:+.2f}%</td>
-                        <td style='width: 8%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{emas_html}</td>
-                        <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['pressure_box']}</td>
-                        <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['cri_box']}</td>
-                        <td style='width: 8%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['sl_box']}</td>
-                        <td style='width: 6%; color: #00e676; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['target']:.2f}</td>
-                        <td style='width: 5%; border-right: 1px dashed #21262d; padding: 6px 4px;'><span style='color: #00e676; font-weight: 900; font-size: 11px;'>{r['tcs']}/100</span></td>
-                        <td style='width: 6%; color: {'#00e676' if r['imbalance'] >= 0 else '#ff5252'}; font-weight: 700; font-size: 10px; padding: 6px 4px;'>{r['cobi_html']}</td>
-                    </tr>
-                    """
-            
-            elapsed_ms = int((time.time() - t0) * 1000)
-            meta_info_str = f"Nifty Gate: {nifty_trend} | LIVE: {now_time_str} IST | Pool: {len(symbols_to_process)} | Latency: {elapsed_ms}ms"
-            
-            display(update_ui_via_javascript(rows_str, meta_info_str))
-            time.sleep(3)
+            df = batch_data[sym].dropna() if len(symbols_to_process[:100]) > 1 else batch_data.dropna()
+            if not df.empty: valid_tuples.append((sym, df))
         except Exception:
-            time.sleep(3)
             continue
+            
+    current_rows = []
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(process_single_stock_data, sym, df, nifty_trend) for sym, df in valid_tuples]
+        for f in futures:
+            res = f.result()
+            if res is not None: current_rows.append(res)
+            
+    current_rows.sort(key=lambda x: (x['sort_score'], x['tcs']), reverse=True)
+    top_rows = current_rows[:MAX_LOCKED_STOCKS]
+    
+    if top_rows:
+        df_display = pd.DataFrame(top_rows)
+        df_display = df_display[['symbol', 'zone_html', 'shield_html', 'open', 'ltp', 'pnl', 'e1', 'pressure_box', 'cri_box', 'sl_box', 'target', 'tcs', 'cobi_html']]
+        df_display.columns = ["Symbol", "Zone Alignments", "Shield", "Open", "LTP", "Change", "(1m|3m|5m|15m)", "Supply/Demand", "Reversal (CRI)", "SL / Entry", "Target", "TCS", "COBI"]
+        table_placeholder.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+    else:
+        table_placeholder.warning("No stocks matching current strict A+ probability criteria.")
 
 if __name__ == "__main__":
-    run_master_engine()
+    main_loop()
