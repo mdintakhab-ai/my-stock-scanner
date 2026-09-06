@@ -1,6 +1,7 @@
 # =====================================================================
-# FALCON QUANT MASTER ENGINE v13.0 - EXACT TERMINAL STREAMLIT APP
+# FALCON QUANT MASTER ENGINE v13.0 (EXACT JUPYTER UI & NIFTY GATE)
 # =====================================================================
+!pip install -q yfinance pandas numpy requests
 
 import io
 import time
@@ -13,13 +14,10 @@ import pandas as pd
 import requests
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
-import streamlit as st
+from IPython.display import display, HTML, clear_output
 
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
-
-# Streamlit Page Config for Wide Web/Mobile View
-st.set_page_config(page_title="Falcon Quant Master Engine", layout="wide")
 
 # -----------------------------------------------------------------------------
 # HARD CONFIGURATION & STRICT THRESHOLDS
@@ -30,11 +28,19 @@ MIN_ABSOLUTE_IOFII = 5.0
 MIN_RUNWAY_GAP_PCT = 1.0
 MAX_LOCKED_STOCKS = 7
 
+SYMBOL_CACHE = []
+LAST_FETCH_TIME = 0
+LOCKED_UNIVERSE = []
+LOCK_EXECUTED = False
+
 # -----------------------------------------------------------------------------
-# 1. DYNAMIC UNIVERSE FETCHING
+# 1. DYNAMIC UNIVERSE FETCHING (NO HARDCODED FALLBACKS)
 # -----------------------------------------------------------------------------
-@st.cache_data(ttl=86400)
 def get_dynamic_nifty500_symbols():
+    global SYMBOL_CACHE, LAST_FETCH_TIME
+    if SYMBOL_CACHE and (time.time() - LAST_FETCH_TIME < 86400):
+        return SYMBOL_CACHE
+
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     url = "https://archives.nseindia.com/content/indices/ind_nifty500list.csv"
     try:
@@ -44,14 +50,12 @@ def get_dynamic_nifty500_symbols():
             col = "Symbol" if "Symbol" in df_nse.columns else df_nse.columns[0]
             syms = [f"{str(s).strip()}.NS" for s in df_nse[col].dropna().unique()]
             if len(syms) > 0:
-                return syms
+                SYMBOL_CACHE = syms
+                LAST_FETCH_TIME = time.time()
+                return SYMBOL_CACHE
     except Exception:
         pass
-    return [
-        "RELIANCE.NS", "HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS",
-        "INFY.NS", "TCS.NS", "BHARTIARTL.NS", "ITC.NS",
-        "LT.NS", "AXISBANK.NS", "KOTAKBANK.NS", "MARUTI.NS"
-    ]
+    return SYMBOL_CACHE
 
 # -----------------------------------------------------------------------------
 # 2. INDEX (NIFTY 50) VWAP TREND GATE
@@ -85,7 +89,7 @@ def check_nifty_vwap_gate():
         return "NEUTRAL"
 
 # -----------------------------------------------------------------------------
-# 3. MATHEMATICAL ENGINES
+# 3. 28-DEFENSE & A+ PROBABILITY MATHEMATICAL ENGINES
 # -----------------------------------------------------------------------------
 def wilder_atr_np(high, low, close, period=14):
     if len(close) < 2: return 5.0
@@ -292,6 +296,9 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, direction="
     else: status, action = "TREND_STABLE", "HOLD_ZONE"
     return round(cri, 2), status, action
 
+# -----------------------------------------------------------------------------
+# 4. SINGLE STOCK PARALLEL QUANT PROCESSING UNIT (WITH NIFTY VWAP GATE)
+# -----------------------------------------------------------------------------
 def process_single_stock_data(sym, df, nifty_trend):
     try:
         if df.empty or len(df) < 15: return None
@@ -362,21 +369,21 @@ def process_single_stock_data(sym, df, nifty_trend):
         retest_html = "<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST</div>" if pressure_pct > 75.0 else ""
         
         pressure_box_html = f"""
-        <div style='border: 1.5px dashed {border_c}; background-color: {bg_c}; padding: 4px 6px; border-radius: 4px; text-align: center;'>
+        <div style='border: 1px dashed {border_c}; background-color: {bg_c}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
             <div style='font-size: 8.5px; font-weight: 800; color: {border_c};'>{status_t}</div>
             <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{pressure_pct:.1f}%</div>
             {retest_html}
         </div>
         """
         
-        cri_val, cri_status, cri_action = compute_bidirectional_cri(df, ltp, target_price, atr_val, direction=direction)
+        cri_val, cri_status, cri_action = compute_bidirectional_cri(df, ltp, target_zone_price, atr_val, direction=direction)
         
         cri_border = "#00e676" if cri_val >= 80.0 else ("#ffaa00" if cri_val >= 65.0 else "#30363d")
         cri_bg = "rgba(0, 230, 118, 0.15)" if cri_val >= 80.0 else "#161b22"
         action_color = "#00e676" if cri_val >= 80.0 else ("#ffaa00" if cri_val >= 65.0 else "#8b949e")
         
         cri_box_html = f"""
-        <div style='border: 1.5px dashed {cri_border}; background-color: {cri_bg}; padding: 4px 6px; border-radius: 4px; text-align: center;'>
+        <div style='border: 1px dashed {cri_border}; background-color: {cri_bg}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
             <div style='font-size: 8.5px; font-weight: 800; color: {action_color};'>{cri_status}</div>
             <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{cri_val:.1f}%</div>
             <div style='color: {action_color}; font-size: 8px; font-weight: 900; margin-top: 1px;'>⚡ {cri_action}</div>
@@ -384,7 +391,7 @@ def process_single_stock_data(sym, df, nifty_trend):
         """
         
         sl_box_html = f"""
-        <div style='border: 1.5px dashed {sl_color}; background-color: {sl_bg}; padding: 4px 6px; border-radius: 4px; text-align: center;'>
+        <div style='border: 1px dashed {sl_color}; background-color: {sl_bg}; padding: 3px 5px; border-radius: 4px; text-align: center;'>
             <div style='font-size: 8.5px; font-weight: 800; color: {sl_color};'>{sl_title}</div>
             <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>₹{sl_best_entry:.2f}</div>
         </div>
@@ -407,138 +414,154 @@ def process_single_stock_data(sym, df, nifty_trend):
         
         return {
             "raw_sym": sym, "symbol": sym.replace(".NS", ""), "zone_html": zone_html,
-            "shield_html": shield_html, "open": f"₹{open_p:.2f}", "ltp": f"₹{ltp:.2f}",
-            "pnl": f"{pnl_pct:+.2f}%", "pressure_box": pressure_box_html, "cri_box": cri_box_html,
-            "sl_box": sl_box_html, "target": f"₹{target_price:.2f}", "tcs": f"{tcs}/100",
-            "cobi_html": cobi_html, "imbalance": iofii, "abs_iofii": abs(iofii),
-            "e1": ltp > ema1, "e3": ltp > ema3, "e5": ltp > ema5, "e15": ltp > ema15,
+            "shield_html": shield_html, "open": open_p, "ltp": ltp, "pnl": pnl_pct,
+            "pressure_box": pressure_box_html, "cri_box": cri_box_html, "sl_box": sl_box_html,
+            "target": target_price, "tcs": tcs, "cobi_html": cobi_html, "imbalance": iofii,
+            "abs_iofii": abs(iofii), "e1": ltp > ema1, "e3": ltp > ema3, "e5": ltp > ema5, "e15": ltp > ema15,
             "sort_score": a_plus_prob
         }
     except Exception:
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT UI RENDER (EXACT DARK TERMINAL MATCH)
+# 5. ZERO-FLICKER HTML & JS UI ARCHITECTURE (STRETCHED & CLEAN)
 # -----------------------------------------------------------------------------
-st.markdown("""
-<style>
-    .stApp { background-color: #090c10; color: #c9d1d9; }
-    table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 11px; text-align: center; background-color: #0e141b; border: 1.5px solid #30363d; border-radius: 8px; }
-    th { background-color: #161b22; color: #8b949e; text-transform: uppercase; font-size: 9.5px; padding: 10px 6px; border-bottom: 1px dashed #30363d; border-right: 1px dashed #30363d; }
-    td { padding: 8px 6px; border-bottom: 1px dashed #30363d; border-right: 1px dashed #21262d; vertical-align: middle; }
-    tr:hover { background-color: #131c25; }
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div style="background-color: #090c10; border: 1.5px solid #30363d; border-radius: 8px; padding: 12px; font-family: monospace; color: #c9d1d9; width: 100%;">
-    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #30363d; padding-bottom: 8px; margin-bottom: 10px;">
-        <div style="color: #00e676; font-size: 13px; font-weight: 900;">🔒 TOP 7 LOCKED (09:20 AM)</div>
-        <div id="falcon-meta" style="color: #8b949e; font-size: 11px; background: #161b22; padding: 4px 10px; border-radius: 4px; border: 1px dashed #30363d;">
-            Initializing Quantum Stream...
+def get_base_container_html():
+    return """
+    <div id="falcon-quant-container" style="background-color: #090c10; border: 1.5px solid #30363d; border-radius: 8px; padding: 12px; font-family: monospace; color: #c9d1d9; width: 100%; box-sizing: border-box;">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #30363d; padding-bottom: 8px; margin-bottom: 10px;">
+            <div style="color: #00e676; font-size: 13px; font-weight: 900;">🔒 TOP 7 LOCKED (09:20 AM)</div>
+            <div id="falcon-meta-info" style="color: #8b949e; font-size: 11px; background: #161b22; padding: 4px 10px; border-radius: 4px; border: 1px dashed #30363d;">
+                Initializing Quantum Stream...
+            </div>
         </div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-table_placeholder = st.empty()
-
-def run_streamlit_engine():
-    global LOCKED_UNIVERSE, LOCK_EXECUTED
-    
-    nifty_trend = check_nifty_vwap_gate()
-    now_time_str = datetime.datetime.now().strftime('%H:%M:%S')
-    
-    is_after_lock = datetime.datetime.now().hour > 9 or (datetime.datetime.now().hour == 9 and datetime.datetime.now().minute >= 20)
-    
-    if is_after_lock and LOCK_EXECUTED and len(LOCKED_UNIVERSE) > 0:
-        symbols_to_process = LOCKED_UNIVERSE
-    else:
-        symbols_to_process = get_dynamic_nifty500_symbols()
-        
-    if not symbols_to_process:
-        st.warning("Universe empty.")
-        return
-        
-    batch_data = yf.download(symbols_to_process[:150], period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
-    if batch_data.empty:
-        return
-        
-    valid_tuples = []
-    for sym in symbols_to_process[:150]:
-        try:
-            df = batch_data[sym].dropna() if len(symbols_to_process[:150]) > 1 else batch_data.dropna()
-            if not df.empty: valid_tuples.append((sym, df))
-        except Exception:
-            continue
-            
-    current_rows = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(process_single_stock_data, sym, df, nifty_trend) for sym, df in valid_tuples]
-        for f in futures:
-            res = f.result()
-            if res is not None: current_rows.append(res)
-            
-    current_rows.sort(key=lambda x: (x['sort_score'], int(x['tcs'].split('/')[0])), reverse=True)
-    
-    if is_after_lock and not LOCK_EXECUTED and len(current_rows) >= MAX_LOCKED_STOCKS:
-        LOCKED_UNIVERSE = [r['raw_sym'] for r in current_rows[:MAX_LOCKED_STOCKS]]
-        LOCK_EXECUTED = True
-        
-    top_rows = current_rows[:MAX_LOCKED_STOCKS]
-    
-    if top_rows:
-        rows_html = ""
-        for r in top_rows:
-            def dot(b): return "<span style='color:#00e676;'>🟢</span>" if b else "<span style='color:#ff5252;'>🔴</span>"
-            emas_html = f"<span style='white-space:nowrap;'>{dot(r['e1'])} {dot(r['e3'])} {dot(r['e5'])} {dot(r['e15'])}</span>"
-            pnl_color = "#00e676" if "+" in r['pnl'] else "#ff5252"
-            
-            rows_html += f"""
-            <tr>
-                <td style='font-weight: 900; text-align: left; color: #ffffff;'>{r['symbol']}</td>
-                <td style='text-align: left; font-size: 9.5px;'>{r['zone_html']}</td>
-                <td>{r['shield_html']}</td>
-                <td>{r['open']}</td>
-                <td><b>{r['ltp']}</b></td>
-                <td style='color: {pnl_color}; font-weight: 800;'>{r['pnl']}</td>
-                <td>{emas_html}</td>
-                <td>{r['pressure_box']}</td>
-                <td>{r['cri_box']}</td>
-                <td>{r['sl_box']}</td>
-                <td style='color: #00e676; font-weight: 800;'>{r['target']}</td>
-                <td><span style='color: #00e676; font-weight: 900;'>{r['tcs']}</span></td>
-                <td style='color: {'#00e676' if r['imbalance'] >= 0 else '#ff5252'}; font-weight: 700; font-size: 10px;'>{r['cobi_html']}</td>
-            </tr>
-            """
-            
-        full_table = f"""
-        <table>
+        <table style="width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 11px; text-align: center; border: 1px dashed #30363d;">
             <thead>
-                <tr>
-                    <th style='text-align: left;'>Symbol</th>
-                    <th style='text-align: left;'>Zone Alignments</th>
-                    <th>Shield</th>
-                    <th>Open</th>
-                    <th>LTP</th>
-                    <th>Change</th>
-                    <th>(1m|3m|5m|15m)</th>
-                    <th>Supply/Demand</th>
-                    <th>Reversal (CRI)</th>
-                    <th>SL / Entry</th>
-                    <th>Target</th>
-                    <th>TCS</th>
-                    <th>COBI</th>
+                <tr style="background: #161b22; color: #8b949e; text-transform: uppercase; font-size: 9.5px; border-bottom: 1px dashed #30363d;">
+                    <th style="width: 7%; text-align: left; padding: 8px 6px; border-right: 1px dashed #30363d;">Symbol</th>
+                    <th style="width: 14%; text-align: left; padding: 8px 6px; border-right: 1px dashed #30363d;">Zone Alignments</th>
+                    <th style="width: 6%; border-right: 1px dashed #30363d;">Shield</th>
+                    <th style="width: 6%; border-right: 1px dashed #30363d;">Open</th>
+                    <th style="width: 6%; border-right: 1px dashed #30363d;">LTP</th>
+                    <th style="width: 6%; border-right: 1px dashed #30363d;">Change</th>
+                    <th style="width: 8%; border-right: 1px dashed #30363d;">(1m|3m|5m|15m)</th>
+                    <th style="width: 11%; border-right: 1px dashed #30363d;">Supply/Demand</th>
+                    <th style="width: 11%; border-right: 1px dashed #30363d;">Reversal (CRI)</th>
+                    <th style="width: 8%; border-right: 1px dashed #30363d;">SL / Entry</th>
+                    <th style="width: 6%; border-right: 1px dashed #30363d;">Target</th>
+                    <th style="width: 5%; border-right: 1px dashed #30363d;">TCS</th>
+                    <th style="width: 6%; padding: 8px 4px;">COBI</th>
                 </tr>
             </thead>
-            <tbody>
-                {rows_html}
+            <tbody id="falcon-table-rows">
+                <tr><td colspan="13" style="padding: 24px; color: #8b949e; text-align: center;">Scanning Nifty 500 through Nifty VWAP Trend Gate...</td></tr>
             </tbody>
         </table>
-        """
-        table_placeholder.markdown(full_table, unsafe_allow_html=True)
-    else:
-        table_placeholder.markdown("<div style='text-align:center; padding:20px; color:#8b949e;'>Scanning Universe via Nifty Gate & Shields...</div>", unsafe_allow_html=True)
+    </div>
+    """
+
+def update_ui_via_javascript(rows_html, meta_info_html):
+    js_code = f"""
+    <script>
+        (function() {{
+            var rowsContainer = document.getElementById('falcon-table-rows');
+            var metaContainer = document.getElementById('falcon-meta-info');
+            if (rowsContainer) {{ rowsContainer.innerHTML = {json.dumps(rows_html)}; }}
+            if (metaContainer) {{ metaContainer.innerHTML = {json.dumps(meta_info_html)}; }}
+        }})();
+    </script>
+    """
+    return HTML(js_code)
+
+# -----------------------------------------------------------------------------
+# 6. LIVE CONTINUOUS EXECUTION LOOP (09:20 AM LOCK SCREEN ARCHITECTURE)
+# -----------------------------------------------------------------------------
+def run_master_engine():
+    global LOCKED_UNIVERSE, LOCK_EXECUTED
+    clear_output(wait=True)
+    display(HTML(get_base_container_html()))
+    
+    while True:
+        try:
+            t0 = time.time()
+            now_dt = datetime.datetime.now()
+            now_time_str = now_dt.strftime('%H:%M:%S')
+            
+            # Fetch Nifty VWAP Trend Gate state
+            nifty_trend = check_nifty_vwap_gate()
+            
+            is_after_lock = (now_dt.hour > 9) or (now_dt.hour == 9 and now_dt.minute >= 20)
+            
+            if is_after_lock and LOCK_EXECUTED and len(LOCKED_UNIVERSE) > 0:
+                symbols_to_process = LOCKED_UNIVERSE
+            else:
+                symbols_to_process = get_dynamic_nifty500_symbols()
+                
+            if not symbols_to_process:
+                time.sleep(2)
+                continue
+                
+            batch_data = yf.download(symbols_to_process, period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
+            if batch_data.empty:
+                time.sleep(2)
+                continue
+                
+            valid_tuples = []
+            for sym in symbols_to_process:
+                try:
+                    df = batch_data[sym].dropna() if len(symbols_to_process) > 1 else batch_data.dropna()
+                    if not df.empty: valid_tuples.append((sym, df))
+                except Exception:
+                    continue
+                    
+            current_rows = []
+            with ThreadPoolExecutor(max_workers=12) as executor:
+                futures = [executor.submit(process_single_stock_data, sym, df, nifty_trend) for sym, df in valid_tuples]
+                for f in futures:
+                    res = f.result()
+                    if res is not None: current_rows.append(res)
+                    
+            current_rows.sort(key=lambda x: (x['sort_score'], x['tcs']), reverse=True)
+            
+            if is_after_lock and not LOCK_EXECUTED and len(current_rows) >= MAX_LOCKED_STOCKS:
+                LOCKED_UNIVERSE = [r['raw_sym'] for r in current_rows[:MAX_LOCKED_STOCKS]]
+                LOCK_EXECUTED = True
+                
+            top_rows = current_rows[:MAX_LOCKED_STOCKS]
+            
+            rows_str = ""
+            if not top_rows:
+                rows_str = f"<tr><td colspan='13' style='padding: 24px; color: #8b949e; text-align: center;'>Nifty Trend Gate: <b>{nifty_trend}</b>. Filtering matching stocks...</td></tr>"
+            else:
+                for r in top_rows:
+                    def dot(b): return "<span style='color:#00e676;'>🟢</span>" if b else "<span style='color:#ff5252;'>🔴</span>"
+                    emas_html = f"<span style='white-space:nowrap;'>{dot(r['e1'])} {dot(r['e3'])} {dot(r['e5'])} {dot(r['e15'])}</span>"
+                    rows_str += f"""
+                    <tr style='border-bottom: 1px dashed #30363d;'>
+                        <td style='width: 7%; font-weight: 900; text-align: left; color: #ffffff; padding: 10px 6px; border-right: 1px dashed #21262d; overflow: hidden; text-overflow: ellipsis;'>{r['symbol']}</td>
+                        <td style='width: 14%; text-align: left; font-size: 9.5px; border-right: 1px dashed #21262d; padding: 6px 6px; overflow: hidden;'>{r['zone_html']}</td>
+                        <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['shield_html']}</td>
+                        <td style='width: 6%; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['open']:.2f}</td>
+                        <td style='width: 6%; font-weight: 700; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['ltp']:.2f}</td>
+                        <td style='width: 6%; color: {'#00e676' if r['pnl'] >= 0 else '#ff5252'}; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>{r['pnl']:+.2f}%</td>
+                        <td style='width: 8%; border-right: 1px dashed #21262d; padding: 6px 4px;'>{emas_html}</td>
+                        <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['pressure_box']}</td>
+                        <td style='width: 11%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['cri_box']}</td>
+                        <td style='width: 8%; padding: 5px 4px; border-right: 1px dashed #21262d;'>{r['sl_box']}</td>
+                        <td style='width: 6%; color: #00e676; font-weight: 800; border-right: 1px dashed #21262d; padding: 6px 4px;'>₹{r['target']:.2f}</td>
+                        <td style='width: 5%; border-right: 1px dashed #21262d; padding: 6px 4px;'><span style='color: #00e676; font-weight: 900; font-size: 11px;'>{r['tcs']}/100</span></td>
+                        <td style='width: 6%; color: {'#00e676' if r['imbalance'] >= 0 else '#ff5252'}; font-weight: 700; font-size: 10px; padding: 6px 4px;'>{r['cobi_html']}</td>
+                    </tr>
+                    """
+            
+            elapsed_ms = int((time.time() - t0) * 1000)
+            meta_info_str = f"Nifty Gate: {nifty_trend} | LIVE: {now_time_str} IST | Pool: {len(symbols_to_process)} | Latency: {elapsed_ms}ms"
+            
+            display(update_ui_via_javascript(rows_str, meta_info_str))
+            time.sleep(3)
+        except Exception:
+            time.sleep(3)
+            continue
 
 if __name__ == "__main__":
-    run_streamlit_engine()
+    run_master_engine()
