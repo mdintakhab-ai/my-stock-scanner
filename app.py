@@ -1,5 +1,5 @@
 # =====================================================================
-# FALCON QUANT MASTER ENGINE v13.0 - STREAMLIT MOBILE WEB APP
+# FALCON QUANT MASTER ENGINE v13.0 - EXACT TERMINAL STREAMLIT APP
 # =====================================================================
 
 import io
@@ -18,7 +18,7 @@ import streamlit as st
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
-# Streamlit Page Config for Mobile/Web View
+# Streamlit Page Config for Wide Web/Mobile View
 st.set_page_config(page_title="Falcon Quant Master Engine", layout="wide")
 
 # -----------------------------------------------------------------------------
@@ -31,7 +31,7 @@ MIN_RUNWAY_GAP_PCT = 1.0
 MAX_LOCKED_STOCKS = 7
 
 # -----------------------------------------------------------------------------
-# 1. DYNAMIC UNIVERSE FETCHING (NO HARDCODED FALLBACKS)
+# 1. DYNAMIC UNIVERSE FETCHING
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_dynamic_nifty500_symbols():
@@ -331,14 +331,14 @@ def process_single_stock_data(sym, df, nifty_trend):
             target_price = ltp - max(atr_val * 1.5, ltp * 0.015)
             sl_best_entry = max(day_high, open_p + max(0.35 * atr_val, ltp * 0.004))
             gap_pct = ((sl_best_entry - target_price) / sl_best_entry) * 100.0
-            zone_html = f"<b>A+ SUPPLY OB ({a_plus_prob}%)</b><br><span style='font-size:11px;'>IOFII: {iofii:.1f}% | POC: ₹{poc_price:.1f}</span>"
-            sl_title, sl_color = "SELL ENTRY / SL", "#ff7675"
+            zone_html = f"<span style='color:#ff5252; font-weight:700;'>A+ SUPPLY OB ({a_plus_prob}%)</span><br><span style='color:#ff7675; font-size:8.5px;'>IOFII: {iofii:.1f}% | POC: ₹{poc_price:.1f}</span>"
+            sl_title, sl_color, sl_bg = "SELL ENTRY / SL", "#ff7675", "rgba(255, 118, 117, 0.12)"
         else:
             target_price = ltp + max(atr_val * 1.5, ltp * 0.015)
             sl_best_entry = min(day_low, open_p - max(0.35 * atr_val, ltp * 0.004))
             gap_pct = ((target_price - sl_best_entry) / sl_best_entry) * 100.0
-            zone_html = f"<b>A+ DEMAND OB ({a_plus_prob}%)</b><br><span style='font-size:11px;'>IOFII: {iofii:.1f}% | POC: ₹{poc_price:.1f}</span>"
-            sl_title, sl_color = "BUY ENTRY / SL", "#55efc4"
+            zone_html = f"<span style='color:#00e676; font-weight:700;'>A+ DEMAND OB ({a_plus_prob}%)</span><br><span style='color:#55efc4; font-size:8.5px;'>IOFII: {iofii:.1f}% | POC: ₹{poc_price:.1f}</span>"
+            sl_title, sl_color, sl_bg = "BUY ENTRY / SL", "#55efc4", "rgba(85, 239, 196, 0.12)"
             
         if gap_pct < MIN_RUNWAY_GAP_PCT: return None
         
@@ -356,7 +356,39 @@ def process_single_stock_data(sym, df, nifty_trend):
         directional_move = (ltp - open_p) if direction == 'DEMAND' else (open_p - ltp)
         pressure_pct = min(100.0, max(0.0, (directional_move / atr_val) * 100.0))
         
+        border_c = "#ff3838" if direction == "SUPPLY" else "#00e676"
+        bg_c = "rgba(255, 56, 56, 0.12)" if direction == "SUPPLY" else "rgba(0, 230, 118, 0.12)"
+        status_t = "SUPPLY ACCUMULATION" if direction == "SUPPLY" else "DEMAND ABSORPTION"
+        retest_html = "<div style='color:#ffaa00; font-size:9px; font-weight:bold; margin-top:2px;'>⚠️ ZONE RE-TEST</div>" if pressure_pct > 75.0 else ""
+        
+        pressure_box_html = f"""
+        <div style='border: 1.5px dashed {border_c}; background-color: {bg_c}; padding: 4px 6px; border-radius: 4px; text-align: center;'>
+            <div style='font-size: 8.5px; font-weight: 800; color: {border_c};'>{status_t}</div>
+            <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{pressure_pct:.1f}%</div>
+            {retest_html}
+        </div>
+        """
+        
         cri_val, cri_status, cri_action = compute_bidirectional_cri(df, ltp, target_price, atr_val, direction=direction)
+        
+        cri_border = "#00e676" if cri_val >= 80.0 else ("#ffaa00" if cri_val >= 65.0 else "#30363d")
+        cri_bg = "rgba(0, 230, 118, 0.15)" if cri_val >= 80.0 else "#161b22"
+        action_color = "#00e676" if cri_val >= 80.0 else ("#ffaa00" if cri_val >= 65.0 else "#8b949e")
+        
+        cri_box_html = f"""
+        <div style='border: 1.5px dashed {cri_border}; background-color: {cri_bg}; padding: 4px 6px; border-radius: 4px; text-align: center;'>
+            <div style='font-size: 8.5px; font-weight: 800; color: {action_color};'>{cri_status}</div>
+            <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>{cri_val:.1f}%</div>
+            <div style='color: {action_color}; font-size: 8px; font-weight: 900; margin-top: 1px;'>⚡ {cri_action}</div>
+        </div>
+        """
+        
+        sl_box_html = f"""
+        <div style='border: 1.5px dashed {sl_color}; background-color: {sl_bg}; padding: 4px 6px; border-radius: 4px; text-align: center;'>
+            <div style='font-size: 8.5px; font-weight: 800; color: {sl_color};'>{sl_title}</div>
+            <div style='font-size: 11px; font-weight: 900; color: #ffffff;'>₹{sl_best_entry:.2f}</div>
+        </div>
+        """
         
         mtf_score = (max(bull_cnt, 4 - bull_cnt) / 4.0) * 25.0
         vwap_score = 20.0 if ((direction == 'DEMAND' and ltp > vwap) or (direction == 'SUPPLY' and ltp < vwap)) else 0.0
@@ -369,66 +401,144 @@ def process_single_stock_data(sym, df, nifty_trend):
         sell_power = np.sum(vol * ((high - close) / bar_range))
         tot_power = buy_power + sell_power + 1e-6
         buy_pct = (buy_power / tot_power) * 100.0
-        cobi_html = f"{buy_pct:.0f}% ({iofii:+.1f}%)"
-        shield_html = f"🛡️ {shield_health}%"
+        cobi_html = f"{buy_pct:.0f}% Buy ({iofii:+.1f}%)"
+        
+        shield_html = f"<span style='color:#00e676; font-weight:bold;'>🛡️ {shield_health}%</span>"
         
         return {
             "raw_sym": sym, "symbol": sym.replace(".NS", ""), "zone_html": zone_html,
-            "shield_html": shield_html, "open": open_p, "ltp": ltp, "pnl": pnl_pct,
-            "emas": f"{1 if ltp > ema1 else 0}|{1 if ltp > ema3 else 0}|{1 if ltp > ema5 else 0}|{1 if ltp > ema15 else 0}",
-            "supply_demand": f"{pressure_pct:.1f}%", "cri": f"{cri_val}% ({cri_status})",
-            "sl_entry": f"₹{sl_best_entry:.2f}", "target": f"₹{target_price:.2f}",
-            "tcs": f"{tcs}/100", "cobi": cobi_html, "sort_score": a_plus_prob
+            "shield_html": shield_html, "open": f"₹{open_p:.2f}", "ltp": f"₹{ltp:.2f}",
+            "pnl": f"{pnl_pct:+.2f}%", "pressure_box": pressure_box_html, "cri_box": cri_box_html,
+            "sl_box": sl_box_html, "target": f"₹{target_price:.2f}", "tcs": f"{tcs}/100",
+            "cobi_html": cobi_html, "imbalance": iofii, "abs_iofii": abs(iofii),
+            "e1": ltp > ema1, "e3": ltp > ema3, "e5": ltp > ema5, "e15": ltp > ema15,
+            "sort_score": a_plus_prob
         }
     except Exception:
         return None
 
 # -----------------------------------------------------------------------------
-# 4. STREAMLIT UI DASHBOARD EXECUTION
+# 5. STREAMLIT UI RENDER (EXACT DARK TERMINAL MATCH)
 # -----------------------------------------------------------------------------
-st.markdown("<h2 style='color: #00e676;'>🔒 TOP 7 LOCKED (09:20 AM)</h2>", unsafe_allow_html=True)
-status_placeholder = st.empty()
+st.markdown("""
+<style>
+    .stApp { background-color: #090c10; color: #c9d1d9; }
+    table { width: 100%; border-collapse: collapse; font-family: monospace; font-size: 11px; text-align: center; background-color: #0e141b; border: 1.5px solid #30363d; border-radius: 8px; }
+    th { background-color: #161b22; color: #8b949e; text-transform: uppercase; font-size: 9.5px; padding: 10px 6px; border-bottom: 1px dashed #30363d; border-right: 1px dashed #30363d; }
+    td { padding: 8px 6px; border-bottom: 1px dashed #30363d; border-right: 1px dashed #21262d; vertical-align: middle; }
+    tr:hover { background-color: #131c25; }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div style="background-color: #090c10; border: 1.5px solid #30363d; border-radius: 8px; padding: 12px; font-family: monospace; color: #c9d1d9; width: 100%;">
+    <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px dashed #30363d; padding-bottom: 8px; margin-bottom: 10px;">
+        <div style="color: #00e676; font-size: 13px; font-weight: 900;">🔒 TOP 7 LOCKED (09:20 AM)</div>
+        <div id="falcon-meta" style="color: #8b949e; font-size: 11px; background: #161b22; padding: 4px 10px; border-radius: 4px; border: 1px dashed #30363d;">
+            Initializing Quantum Stream...
+        </div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
 table_placeholder = st.empty()
 
-def main_loop():
-    symbols_to_process = get_dynamic_nifty500_symbols()
+def run_streamlit_engine():
+    global LOCKED_UNIVERSE, LOCK_EXECUTED
+    
+    nifty_trend = check_nifty_vwap_gate()
+    now_time_str = datetime.datetime.now().strftime('%H:%M:%S')
+    
+    is_after_lock = datetime.datetime.now().hour > 9 or (datetime.datetime.now().hour == 9 and datetime.datetime.now().minute >= 20)
+    
+    if is_after_lock and LOCK_EXECUTED and len(LOCKED_UNIVERSE) > 0:
+        symbols_to_process = LOCKED_UNIVERSE
+    else:
+        symbols_to_process = get_dynamic_nifty500_symbols()
+        
     if not symbols_to_process:
-        st.warning("Fetching symbols failed.")
+        st.warning("Universe empty.")
         return
         
-    nifty_trend = check_nifty_vwap_gate()
-    status_placeholder.info(f"Nifty Trend Gate: **{nifty_trend}** | Scanning Nifty 500 Universe...")
-    
-    batch_data = yf.download(symbols_to_process[:100], period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
+    batch_data = yf.download(symbols_to_process[:150], period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
     if batch_data.empty:
-        st.error("Market data empty.")
         return
         
     valid_tuples = []
-    for sym in symbols_to_process[:100]:
+    for sym in symbols_to_process[:150]:
         try:
-            df = batch_data[sym].dropna() if len(symbols_to_process[:100]) > 1 else batch_data.dropna()
+            df = batch_data[sym].dropna() if len(symbols_to_process[:150]) > 1 else batch_data.dropna()
             if not df.empty: valid_tuples.append((sym, df))
         except Exception:
             continue
             
     current_rows = []
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         futures = [executor.submit(process_single_stock_data, sym, df, nifty_trend) for sym, df in valid_tuples]
         for f in futures:
             res = f.result()
             if res is not None: current_rows.append(res)
             
     current_rows.sort(key=lambda x: (x['sort_score'], int(x['tcs'].split('/')[0])), reverse=True)
+    
+    if is_after_lock and not LOCK_EXECUTED and len(current_rows) >= MAX_LOCKED_STOCKS:
+        LOCKED_UNIVERSE = [r['raw_sym'] for r in current_rows[:MAX_LOCKED_STOCKS]]
+        LOCK_EXECUTED = True
+        
     top_rows = current_rows[:MAX_LOCKED_STOCKS]
     
     if top_rows:
-        df_display = pd.DataFrame(top_rows)
-        df_display = df_display[['symbol', 'zone_html', 'shield_html', 'open', 'ltp', 'pnl', 'emas', 'supply_demand', 'cri', 'sl_entry', 'target', 'tcs', 'cobi']]
-        df_display.columns = ["Symbol", "Zone Alignments", "Shield", "Open", "LTP", "Change", "(1m|3m|5m|15m)", "Supply/Demand", "Reversal (CRI)", "SL / Entry", "Target", "TCS", "COBI"]
-        table_placeholder.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+        rows_html = ""
+        for r in top_rows:
+            def dot(b): return "<span style='color:#00e676;'>🟢</span>" if b else "<span style='color:#ff5252;'>🔴</span>"
+            emas_html = f"<span style='white-space:nowrap;'>{dot(r['e1'])} {dot(r['e3'])} {dot(r['e5'])} {dot(r['e15'])}</span>"
+            pnl_color = "#00e676" if "+" in r['pnl'] else "#ff5252"
+            
+            rows_html += f"""
+            <tr>
+                <td style='font-weight: 900; text-align: left; color: #ffffff;'>{r['symbol']}</td>
+                <td style='text-align: left; font-size: 9.5px;'>{r['zone_html']}</td>
+                <td>{r['shield_html']}</td>
+                <td>{r['open']}</td>
+                <td><b>{r['ltp']}</b></td>
+                <td style='color: {pnl_color}; font-weight: 800;'>{r['pnl']}</td>
+                <td>{emas_html}</td>
+                <td>{r['pressure_box']}</td>
+                <td>{r['cri_box']}</td>
+                <td>{r['sl_box']}</td>
+                <td style='color: #00e676; font-weight: 800;'>{r['target']}</td>
+                <td><span style='color: #00e676; font-weight: 900;'>{r['tcs']}</span></td>
+                <td style='color: {'#00e676' if r['imbalance'] >= 0 else '#ff5252'}; font-weight: 700; font-size: 10px;'>{r['cobi_html']}</td>
+            </tr>
+            """
+            
+        full_table = f"""
+        <table>
+            <thead>
+                <tr>
+                    <th style='text-align: left;'>Symbol</th>
+                    <th style='text-align: left;'>Zone Alignments</th>
+                    <th>Shield</th>
+                    <th>Open</th>
+                    <th>LTP</th>
+                    <th>Change</th>
+                    <th>(1m|3m|5m|15m)</th>
+                    <th>Supply/Demand</th>
+                    <th>Reversal (CRI)</th>
+                    <th>SL / Entry</th>
+                    <th>Target</th>
+                    <th>TCS</th>
+                    <th>COBI</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+        """
+        table_placeholder.markdown(full_table, unsafe_allow_html=True)
     else:
-        table_placeholder.warning("No stocks matching current strict A+ probability criteria.")
+        table_placeholder.markdown("<div style='text-align:center; padding:20px; color:#8b949e;'>Scanning Universe via Nifty Gate & Shields...</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
-    main_loop()
+    run_streamlit_engine()
