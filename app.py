@@ -1,5 +1,5 @@
 # =====================================================================
-# FALCON QUANT MASTER ENGINE v13.0 (STREAMLIT & JUPYTER UI COMPATIBLE)
+# FALCON QUANT MASTER ENGINE v13.0 (STREAMLIT WEB & MOBILE DEPLOYMENT)
 # =====================================================================
 
 import io
@@ -13,9 +13,13 @@ import pandas as pd
 import requests
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor
+import streamlit as st
 
 warnings.filterwarnings('ignore')
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
+
+# Streamlit Native Layout Config for Mobile/Desktop Responsiveness
+st.set_page_config(page_title="Falcon Quant Master Engine", layout="wide")
 
 # -----------------------------------------------------------------------------
 # HARD CONFIGURATION & STRICT THRESHOLDS
@@ -34,6 +38,7 @@ LOCK_EXECUTED = False
 # -----------------------------------------------------------------------------
 # 1. DYNAMIC UNIVERSE FETCHING (NO HARDCODED FALLBACKS)
 # -----------------------------------------------------------------------------
+@st.cache_data(ttl=86400)
 def get_dynamic_nifty500_symbols():
     global SYMBOL_CACHE, LAST_FETCH_TIME
     if SYMBOL_CACHE and (time.time() - LAST_FETCH_TIME < 86400):
@@ -295,7 +300,7 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, direction="
     return round(cri, 2), status, action
 
 # -----------------------------------------------------------------------------
-# 4. SINGLE STOCK PARALLEL QUANT PROCESSING UNIT (WITH NIFTY VWAP GATE)
+# 4. SINGLE STOCK PARALLEL QUANT PROCESSING UNIT
 # -----------------------------------------------------------------------------
 def process_single_stock_data(sym, df, nifty_trend):
     try:
@@ -422,30 +427,30 @@ def process_single_stock_data(sym, df, nifty_trend):
         return None
 
 # -----------------------------------------------------------------------------
-# 5. STREAMLIT WEB APP ARCHITECTURE
+# 5. STREAMLIT APP UI INTERFACE FOR CLOUD DEPLOYMENT
 # -----------------------------------------------------------------------------
-st.markdown("<h2 style='color: #00e676;'>🔒 TOP 7 LOCKED (09:20 AM)</h2>", unsafe_allow_html=True)
+st.markdown("<h2 style='color: #00e676; font-family: monospace;'>🔒 TOP 7 LOCKED (09:20 AM)</h2>", unsafe_allow_html=True)
 status_placeholder = st.empty()
 table_placeholder = st.empty()
 
-def main_loop():
+def run_streamlit_app():
     symbols_to_process = get_dynamic_nifty500_symbols()
     if not symbols_to_process:
         st.warning("Fetching symbols failed.")
         return
         
     nifty_trend = check_nifty_vwap_gate()
-    status_placeholder.info(f"Nifty Trend Gate: **{nifty_trend}** | Scanning Nifty 500 Universe...")
+    status_placeholder.markdown(f"<div style='background:#161b22; color:#8b949e; padding:8px; border-radius:4px; font-family:monospace; border:1px dashed #30363d;'>Nifty Trend Gate: <b>{nifty_trend}</b> | Scanning Nifty 500 Universe...</div>", unsafe_allow_html=True)
     
-    batch_data = yf.download(symbols_to_process[:100], period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
+    batch_data = yf.download(symbols_to_process[:80], period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
     if batch_data.empty:
         st.error("Market data empty.")
         return
         
     valid_tuples = []
-    for sym in symbols_to_process[:100]:
+    for sym in symbols_to_process[:80]:
         try:
-            df = batch_data[sym].dropna() if len(symbols_to_process[:100]) > 1 else batch_data.dropna()
+            df = batch_data[sym].dropna() if len(symbols_to_process[:80]) > 1 else batch_data.dropna()
             if not df.empty: valid_tuples.append((sym, df))
         except Exception:
             continue
@@ -461,12 +466,37 @@ def main_loop():
     top_rows = current_rows[:MAX_LOCKED_STOCKS]
     
     if top_rows:
-        df_display = pd.DataFrame(top_rows)
-        df_display = df_display[['symbol', 'zone_html', 'shield_html', 'open', 'ltp', 'pnl', 'e1', 'pressure_box', 'cri_box', 'sl_box', 'target', 'tcs', 'cobi_html']]
-        df_display.columns = ["Symbol", "Zone Alignments", "Shield", "Open", "LTP", "Change", "(1m|3m|5m|15m)", "Supply/Demand", "Reversal (CRI)", "SL / Entry", "Target", "TCS", "COBI"]
-        table_placeholder.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+        display_data = []
+        for r in top_rows:
+            dot = lambda b: "<span style='color:#00e676;'>🟢</span>" if b else "<span style='color:#ff5252;'>🔴</span>"
+            emas = f"{dot(r['e1'])} {dot(r['e3'])} {dot(r['e5'])} {dot(r['e15'])}"
+            display_data.append({
+                "Symbol": f"<b>{r['symbol']}</b>",
+                "Zone Alignments": r['zone_html'],
+                "Shield": r['shield_html'],
+                "Open": f"₹{r['open']:.2f}",
+                "LTP": f"<b>₹{r['ltp']:.2f}</b>",
+                "Change": f"<span style='color: {'#00e676' if r['pnl'] >= 0 else '#ff5252'};'>{r['pnl']:+.2f}%</span>",
+                "(1m|3m|5m|15m)": emas,
+                "Supply/Demand": r['pressure_box'],
+                "Reversal (CRI)": r['cri_box'],
+                "SL / Entry": r['sl_box'],
+                "Target": f"<span style='color:#00e676;'><b>₹{r['target']:.2f}</b></span>",
+                "TCS": f"<b>{r['tcs']}/100</b>",
+                "COBI": f"<span style='color: {'#00e676' if r['imbalance'] >= 0 else '#ff5252'};'>{r['cobi_html']}</span>"
+            })
+            
+        df_display = pd.DataFrame(display_data)
+        html_table = df_display.to_html(escape=False, index=False)
+        
+        styled_html = f"""
+        <div style="background-color: #090c10; border: 1.5px solid #30363d; border-radius: 8px; padding: 12px; font-family: monospace; color: #c9d1d9; width: 100%; overflow-x: auto;">
+            {html_table.replace('<table border="1" class="dataframe">', '<table style="width: 100%; border-collapse: collapse; font-size: 11px; text-align: center; border: 1px dashed #30363d;">').replace('<th>', '<th style="background: #161b22; color: #8b949e; padding: 8px; border: 1px dashed #30363d;">').replace('<td>', '<td style="padding: 8px; border: 1px dashed #30363d; vertical-align: middle;">')}
+        </div>
+        """
+        table_placeholder.markdown(styled_html, unsafe_allow_html=True)
     else:
         table_placeholder.warning("No stocks matching current strict A+ probability criteria.")
 
 if __name__ == "__main__":
-    main_loop()
+    run_streamlit_app()
