@@ -1,5 +1,5 @@
 # =====================================================================
-# FALCON QUANT MASTER ENGINE v13.1 (100% EXACT DESKTOP & STREAMLIT SYNC)
+# FALCON QUANT MASTER ENGINE v13.2 (100% EXACT CODE & WEEKEND SAFEGUARD)
 # =====================================================================
 
 import io
@@ -37,7 +37,7 @@ LOCKED_UNIVERSE = []
 LOCK_EXECUTED = False
 
 # -----------------------------------------------------------------------------
-# 1. DYNAMIC UNIVERSE FETCHING
+# 1. DYNAMIC UNIVERSE FETCHING (NO HARDCODED FALLBACKS)
 # -----------------------------------------------------------------------------
 @st.cache_data(ttl=86400)
 def get_dynamic_nifty500_symbols():
@@ -72,8 +72,8 @@ def get_dynamic_nifty500_symbols():
 # -----------------------------------------------------------------------------
 def check_nifty_vwap_gate():
     try:
-        df_nifty = yf.download("^NSEI", period="1d", interval="1m", progress=False, auto_adjust=True)
-        if df_nifty is None or df_nifty.empty or len(df_nifty) < 3:
+        df_nifty = yf.download("^NSEI", period="5d", interval="1m", progress=False, auto_adjust=True)
+        if df_nifty is None or df_nifty.empty:
             return "BULLISH"
             
         if isinstance(df_nifty.columns, pd.MultiIndex):
@@ -97,7 +97,7 @@ def check_nifty_vwap_gate():
         return "BULLISH"
 
 # -----------------------------------------------------------------------------
-# 3. MATHEMATICAL ENGINES
+# 3. 28-DEFENSE & A+ PROBABILITY MATHEMATICAL ENGINES
 # -----------------------------------------------------------------------------
 def wilder_atr_np(high, low, close, period=14):
     if len(close) < 2: return 5.0
@@ -248,6 +248,9 @@ def compute_bidirectional_cri(df_1m, ltp, target_zone_price, atr_14, direction="
     else: status, action = "TREND_STABLE", "HOLD_ZONE"
     return round(cri, 2), status, action
 
+# -----------------------------------------------------------------------------
+# 4. SINGLE STOCK PARALLEL QUANT PROCESSING UNIT
+# -----------------------------------------------------------------------------
 def process_single_stock_data(sym, df, nifty_trend):
     try:
         if df.empty or len(df) < 5: return None
@@ -271,7 +274,6 @@ def process_single_stock_data(sym, df, nifty_trend):
         clv = ((close - low) - (high - close)) / bar_range
         iofii = float((np.sum(clv * vol) / (np.sum(vol) + 1e-6)) * 100.0)
         
-        if abs(iofii) < MIN_ABSOLUTE_IOFII: return None
         direction = "DEMAND" if iofii >= 0 else "SUPPLY"
         
         poc_price = compute_volume_profile_poc(high, low, close, vol)
@@ -365,21 +367,13 @@ def process_single_stock_data(sym, df, nifty_trend):
 # -----------------------------------------------------------------------------
 # 5. STREAMLIT EXACT DESKTOP UI BRIDGE
 # -----------------------------------------------------------------------------
-st.markdown("""
-    <style>
-    .stApp { background-color: #090c10; color: #c9d1d9; }
-    </style>
-""", unsafe_allow_html=True)
-
 def render_dashboard():
-    symbols_to_process = get_dynamic_nifty500_symbols()[:30]
-    if not symbols_to_process:
-        return
-        
+    symbols_to_process = get_dynamic_nifty500_symbols()[:25]
     nifty_trend = check_nifty_vwap_gate()
     
-    batch_data = yf.download(symbols_to_process, period="1d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
+    batch_data = yf.download(symbols_to_process, period="5d", interval="1m", progress=False, group_by='ticker', auto_adjust=True)
     if batch_data.empty:
+        st.error("Market data empty.")
         return
         
     valid_tuples = []
